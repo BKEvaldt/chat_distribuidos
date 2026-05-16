@@ -32,8 +32,7 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    preDeployCommand: flask --app app db upgrade
-    startCommand: gunicorn -c gunicorn.conf.py wsgi:app
+    startCommand: flask --app app db upgrade && gunicorn -c gunicorn.conf.py wsgi:app
     healthCheckPath: /health
     envVars:
       - fromGroup: chat-distribuido-shared

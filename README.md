@@ -55,8 +55,7 @@ O Blueprint usa:
 
 ```bash
 pip install -r requirements.txt
-flask --app app db upgrade
-gunicorn -c gunicorn.conf.py wsgi:app
+flask --app app db upgrade && gunicorn -c gunicorn.conf.py wsgi:app
 gunicorn -c gunicorn.conf.py backup_wsgi:app
 ```
 
@@ -80,10 +79,10 @@ As variaveis `PRIMARY_INTERNAL_URL` e `BACKUP_INTERNAL_URL` sao preenchidas pelo
 
 ## Banco
 
-O banco e PostgreSQL no Render. As migrations ficam em `migrations/` e sao aplicadas automaticamente pelo `preDeployCommand` do servico primario:
+O banco e PostgreSQL no Render. As migrations ficam em `migrations/` e sao aplicadas automaticamente no `startCommand` do servico primario antes do Gunicorn iniciar:
 
 ```bash
-flask --app app db upgrade
+flask --app app db upgrade && gunicorn -c gunicorn.conf.py wsgi:app
 ```
 
 Tabelas:
