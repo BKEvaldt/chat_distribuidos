@@ -32,8 +32,10 @@ def required_env(name):
 
 def database_uri():
     url = required_env("DATABASE_URL")
-    if url and url.startswith("postgres://"):
-        return url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+psycopg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg://", 1)
     return url
 
 
