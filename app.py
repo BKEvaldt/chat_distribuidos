@@ -112,6 +112,16 @@ def add_message(message, user_id=None):
     return store_message(message, user_id=user_id)
 
 
+def notification_payload(text, level="info"):
+    return {
+        "id": str(uuid4()),
+        "type": "notification",
+        "level": level,
+        "text": text,
+        "timestamp": now_iso(),
+    }
+
+
 def primary_is_active():
     return active_role() == PRIMARY_ROLE
 
@@ -315,21 +325,14 @@ def handle_join(data=None):
             "joined_at": previous["joined_at"] if previous else now_iso(),
         }
 
-    system_message = None
     if not previous:
-        system_message = {
-            "id": str(uuid4()),
-            "type": "system",
-            "user": "sistema",
-            "text": f"{name} entrou no chat.",
-            "timestamp": now_iso(),
-        }
-        system_message = add_message(system_message)
-        replicate_event("message", system_message)
+        socketio.emit(
+            "chat_notification",
+            notification_payload(f"{name} entrou no chat."),
+            skip_sid=request.sid,
+        )
 
     emit("message_history", latest_messages(MAX_HISTORY))
-    if system_message:
-        socketio.emit("system_message", system_message, skip_sid=request.sid)
 
     snapshot = users_snapshot()
     socketio.emit("users_update", snapshot)
@@ -378,16 +381,10 @@ def handle_disconnect():
         user = connected_users.pop(request.sid, None)
 
     if user:
-        system_message = {
-            "id": str(uuid4()),
-            "type": "system",
-            "user": "sistema",
-            "text": f"{user['name']} saiu do chat.",
-            "timestamp": now_iso(),
-        }
-        system_message = add_message(system_message)
-        socketio.emit("system_message", system_message)
-        replicate_event("message", system_message)
+        socketio.emit(
+            "chat_notification",
+            notification_payload(f"{user['name']} saiu do chat."),
+        )
 
         snapshot = users_snapshot()
         socketio.emit("users_update", snapshot)

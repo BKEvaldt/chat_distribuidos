@@ -97,6 +97,16 @@ def add_message(message):
     return store_message(message)
 
 
+def notification_payload(text, level="info"):
+    return {
+        "id": str(uuid4()),
+        "type": "notification",
+        "level": level,
+        "text": text,
+        "timestamp": now_iso(),
+    }
+
+
 def primary_is_healthy():
     try:
         response = requests.get(PRIMARY_HEALTH_URL, timeout=1.5)
@@ -180,20 +190,18 @@ def promote_to_active():
 
     set_active_role(BACKUP_ROLE)
 
-    message = {
-        "id": str(uuid4()),
-        "type": "system",
-        "user": "sistema",
-        "text": "Backup assumiu como servidor ativo apos falha no principal.",
-        "timestamp": now_iso(),
-    }
-    message = add_message(message)
     logging.warning("Backup promovido para servidor ativo.")
     socketio.emit(
         "server_promoted",
         {"role": "backup", "active": True, "server_url": BACKUP_PUBLIC_URL},
     )
-    socketio.emit("system_message", message)
+    socketio.emit(
+        "chat_notification",
+        notification_payload(
+            "Backup assumiu como servidor ativo apos falha no principal.",
+            level="warning",
+        ),
+    )
 
 
 def heartbeat_worker():
@@ -367,20 +375,14 @@ def handle_join(data=None):
             "joined_at": previous["joined_at"] if previous else now_iso(),
         }
 
-    system_message = None
     if not previous:
-        system_message = {
-            "id": str(uuid4()),
-            "type": "system",
-            "user": "sistema",
-            "text": f"{name} entrou no chat.",
-            "timestamp": now_iso(),
-        }
-        system_message = add_message(system_message)
+        socketio.emit(
+            "chat_notification",
+            notification_payload(f"{name} entrou no chat."),
+            skip_sid=request.sid,
+        )
 
     emit("message_history", latest_messages(MAX_HISTORY))
-    if system_message:
-        socketio.emit("system_message", system_message, skip_sid=request.sid)
 
     socketio.emit("users_update", users_snapshot())
 
@@ -437,15 +439,13 @@ def handle_restore_primary():
         emit("chat_error", {"message": "Nao foi possivel restaurar o primario."})
         return
 
-    message = {
-        "id": str(uuid4()),
-        "type": "system",
-        "user": "sistema",
-        "text": "Servidor primario restaurado. Reconectando clientes.",
-        "timestamp": now_iso(),
-    }
-    message = add_message(message)
-    socketio.emit("system_message", message)
+    socketio.emit(
+        "chat_notification",
+        notification_payload(
+            "Servidor primario restaurado. Reconectando clientes.",
+            level="success",
+        ),
+    )
     socketio.emit("users_update", users_snapshot())
     socketio.emit(
         "primary_restored",
@@ -461,15 +461,10 @@ def handle_disconnect():
 
     active = backup_is_active()
     if active and user:
-        system_message = {
-            "id": str(uuid4()),
-            "type": "system",
-            "user": "sistema",
-            "text": f"{user['name']} saiu do chat.",
-            "timestamp": now_iso(),
-        }
-        system_message = add_message(system_message)
-        socketio.emit("system_message", system_message)
+        socketio.emit(
+            "chat_notification",
+            notification_payload(f"{user['name']} saiu do chat."),
+        )
         socketio.emit("users_update", users_snapshot())
 
 

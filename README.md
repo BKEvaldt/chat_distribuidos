@@ -91,6 +91,8 @@ Tabelas:
 - `messages`: historico de mensagens.
 - `server_state`: indica se o servidor ativo atual e `primary` ou `backup`.
 
+O historico mostra apenas mensagens de usuarios. Eventos como entrada, saida, failover e restauracao aparecem como notificacoes temporarias na interface.
+
 ## Login Entre Dominios
 
 Como primario e backup ficam em dominios diferentes, o cookie de login do primario nao acompanha automaticamente a conexao Socket.IO no backup.

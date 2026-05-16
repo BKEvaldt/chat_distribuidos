@@ -4,6 +4,7 @@
   const messageForm = document.getElementById("messageForm");
   const messageInput = document.getElementById("messageInput");
   const messages = document.getElementById("messages");
+  const toastRegion = document.getElementById("toastRegion");
   const usersList = document.getElementById("usersList");
   const failoverButton = document.getElementById("failoverButton");
   const restoreButton = document.getElementById("restoreButton");
@@ -122,11 +123,13 @@
       activeRole = info.role || "backup";
       setStatus(`Conectado ao ${activeRole}: ${activeUrl}`);
       updateServerControls(activeRole, true);
+      showToast("Backup ativo.", "warning");
     });
 
     socket.on("primary_restored", function (info) {
       preferCandidate(info.server_url || config.primaryUrl);
       setStatus("Primario restaurado. Reconectando...");
+      showToast("Primario restaurado.", "success");
       updateServerControls("backup", false);
       if (socket) {
         socket.disconnect();
@@ -145,9 +148,10 @@
       scrollToBottom();
     });
 
-    socket.on("system_message", function (message) {
-      renderMessage(message);
-      scrollToBottom();
+    socket.on("chat_notification", function (notification) {
+      if (notification && notification.text) {
+        showToast(notification.text, notification.level);
+      }
     });
 
     socket.on("users_update", renderUsers);
@@ -192,9 +196,7 @@
     item.className = "message";
 
     if (message.type === "system") {
-      item.classList.add("system");
-      item.textContent = message.text;
-      messages.appendChild(item);
+      showToast(message.text, message.level);
       return;
     }
 
@@ -223,6 +225,25 @@
     item.appendChild(header);
     item.appendChild(text);
     messages.appendChild(item);
+  }
+
+  function showToast(text, level) {
+    if (!toastRegion) {
+      return;
+    }
+
+    const toast = document.createElement("div");
+    toast.className = `toast ${level || "info"}`;
+    toast.textContent = text;
+    toastRegion.appendChild(toast);
+
+    window.setTimeout(function () {
+      toast.classList.add("leaving");
+    }, 3600);
+
+    window.setTimeout(function () {
+      toast.remove();
+    }, 4200);
   }
 
   function formatTime(timestamp) {

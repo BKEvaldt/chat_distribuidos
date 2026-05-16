@@ -25,7 +25,8 @@ def parse_iso_datetime(value):
 
 def latest_messages(limit):
     messages = (
-        Message.query.order_by(Message.created_at.desc(), Message.id.desc())
+        Message.query.filter_by(type="user")
+        .order_by(Message.created_at.desc(), Message.id.desc())
         .limit(limit)
         .all()
     )
