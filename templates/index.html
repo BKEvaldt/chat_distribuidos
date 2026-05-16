@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Chat Distribuido</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="chat-panel" aria-label="Chat">
+        <header class="topbar">
+          <div>
+            <h1>Chat Distribuido</h1>
+            <p id="serverStatus">Conectando...</p>
+          </div>
+          <div class="topbar-actions">
+            <span class="user-pill">{{ current_username }}</span>
+            <span class="role-pill">{{ server_role }}</span>
+            {% if failover_control_enabled %}
+              <button id="failoverButton" class="danger-button" type="button" hidden>Derrubar primario</button>
+            {% endif %}
+            {% if restore_control_enabled %}
+              <button id="restoreButton" class="secondary-button" type="button" hidden>Voltar ao primario</button>
+            {% endif %}
+            <form action="{{ url_for('logout') }}" method="post">
+              <button class="secondary-button" type="submit">Sair</button>
+            </form>
+          </div>
+        </header>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="messageForm" class="message-form">
+          <label class="sr-only" for="messageInput">Mensagem</label>
+          <input id="messageInput" maxlength="1000" autocomplete="off" placeholder="Digite uma mensagem">
+          <button type="submit">Enviar</button>
+        </form>
+      </section>
+
+      <aside class="users-panel" aria-label="Usuarios conectados">
+        <h2>Usuarios conectados</h2>
+        <ul id="usersList"></ul>
+      </aside>
+    </main>
+
+    <script>
+      window.CHAT_CONFIG = {
+        primaryUrl: {{ primary_url|tojson }},
+        backupUrl: {{ backup_url|tojson }},
+        pageRole: {{ server_role|tojson }},
+        currentUser: {{ current_username|tojson }},
+        socketAuthToken: {{ socket_auth_token|tojson }},
+        failoverUrl: {{ failover_url|tojson }}
+      };
+    </script>
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+  </body>
+</html>

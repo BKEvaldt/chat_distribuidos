@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Entrar | Chat Distribuido</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  </head>
+  <body>
+    <main class="auth-shell">
+      <section class="auth-panel" aria-label="Login">
+        <header>
+          <h1>Chat Distribuido</h1>
+          <p>Entre na sua conta</p>
+        </header>
+
+        {% if error %}
+          <p class="form-error">{{ error }}</p>
+        {% endif %}
+
+        <form class="auth-form" method="post">
+          <label for="username">Usuario</label>
+          <input id="username" name="username" maxlength="32" autocomplete="username" required autofocus>
+
+          <label for="password">Senha</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+          <label class="check-row">
+            <input name="remember" type="checkbox" value="1">
+            <span>Manter conectado</span>
+          </label>
+
+          <button type="submit">Entrar</button>
+        </form>
+
+        <p class="auth-link">Ainda nao tem conta? <a href="{{ url_for('register') }}">Criar cadastro</a></p>
+      </section>
+    </main>
+  </body>
+</html>

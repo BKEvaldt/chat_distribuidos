@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Criar Conta | Chat Distribuido</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  </head>
+  <body>
+    <main class="auth-shell">
+      <section class="auth-panel" aria-label="Cadastro">
+        <header>
+          <h1>Chat Distribuido</h1>
+          <p>Crie sua conta</p>
+        </header>
+
+        {% if error %}
+          <p class="form-error">{{ error }}</p>
+        {% endif %}
+
+        <form class="auth-form" method="post">
+          <label for="username">Usuario</label>
+          <input id="username" name="username" maxlength="32" autocomplete="username" required autofocus>
+
+          <label for="password">Senha</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" required>
+
+          <label for="confirm_password">Confirmar senha</label>
+          <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required>
+
+          <button type="submit">Criar conta</button>
+        </form>
+
+        <p class="auth-link">Ja tem conta? <a href="{{ url_for('login') }}">Entrar</a></p>
+      </section>
+    </main>
+  </body>
+</html>
