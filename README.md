@@ -15,7 +15,7 @@ O Blueprint cria:
 
 O banco esta com `plan: free` no `render.yaml`. No Render, bancos PostgreSQL gratuitos expiram depois de 30 dias; para manter dados por mais tempo, troque o plano do banco no Blueprint ou no dashboard.
 
-O navegador acessa a URL publica do primario. O primario replica mensagens para o backup pela rede privada do Render. O backup monitora o primario por heartbeat e assume quando o primario falha.
+O navegador acessa a URL publica do primario. O primario replica mensagens para o backup e o backup monitora o primario por heartbeat. No Blueprint atual, essas chamadas usam as URLs publicas dos servicos para evitar dependencia circular durante a criacao inicial dos recursos no Render.
 
 ## Estrutura
 
@@ -75,7 +75,7 @@ PRIMARY_PUBLIC_URL
 BACKUP_PUBLIC_URL
 ```
 
-As variaveis `PRIMARY_INTERNAL_URL` e `BACKUP_INTERNAL_URL` sao preenchidas pelo Blueprint com `fromService` e `property: hostport`, usando a rede privada do Render.
+As variaveis `PRIMARY_INTERNAL_URL` e `BACKUP_INTERNAL_URL` ficam apontando para as URLs publicas dos servicos no `render.yaml`. Depois que os dois servicos existirem, voce pode trocar esses valores no dashboard para os enderecos internos do Render se quiser usar a rede privada.
 
 ## Banco
 
@@ -103,7 +103,7 @@ Com `ENABLE_FAILOVER_CONTROL=1`, a interface do primario mostra **Derrubar prima
 
 Ao clicar:
 
-1. o primario chama `POST /promote` no backup pela rede privada;
+1. o primario chama `POST /promote` no backup;
 2. o backup grava `backup` em `server_state`;
 3. o primario encerra o proprio processo;
 4. o Render reinicia o servico primario;
