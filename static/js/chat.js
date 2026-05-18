@@ -6,8 +6,7 @@
   const messages = document.getElementById("messages");
   const toastRegion = document.getElementById("toastRegion");
   const usersList = document.getElementById("usersList");
-  const failoverButton = document.getElementById("failoverButton");
-  const restoreButton = document.getElementById("restoreButton");
+  const serverSwitchButton = document.getElementById("serverSwitchButton");
 
   const candidates = uniqueUrls([
     config.primaryUrl,
@@ -47,14 +46,9 @@
   }
 
   function updateServerControls(role, active) {
-    if (failoverButton) {
-      failoverButton.hidden = !(active && role === "primary");
-      failoverButton.disabled = false;
-    }
-
-    if (restoreButton) {
-      restoreButton.hidden = !(active && role === "backup");
-      restoreButton.disabled = false;
+    if (serverSwitchButton) {
+      serverSwitchButton.hidden = !(active && ["primary", "backup"].includes(role));
+      serverSwitchButton.disabled = false;
     }
   }
 
@@ -323,14 +317,31 @@
     messageInput.focus();
   });
 
-  if (failoverButton && config.failoverUrl) {
-    failoverButton.addEventListener("click", function () {
-      if (!window.confirm("Derrubar o servidor primario e promover o backup?")) {
+  if (serverSwitchButton) {
+    serverSwitchButton.addEventListener("click", function () {
+      if (!window.confirm("Trocar para o outro servidor?")) {
         return;
       }
 
-      failoverButton.disabled = true;
+      serverSwitchButton.disabled = true;
       setStatus("Aplicando troca...");
+
+      if (activeRole === "backup") {
+        if (!socket || !socket.connected) {
+          setStatus("Nao foi possivel aplicar a troca.");
+          serverSwitchButton.disabled = false;
+          return;
+        }
+
+        socket.emit("restore_primary");
+        return;
+      }
+
+      if (activeRole !== "primary" || !config.failoverUrl) {
+        setStatus("Nao foi possivel aplicar a troca.");
+        serverSwitchButton.disabled = false;
+        return;
+      }
 
       fetch(config.failoverUrl, {
         method: "POST",
@@ -350,26 +361,9 @@
           scheduleReconnect(1200);
         })
         .catch(function () {
-          failoverButton.disabled = false;
+          serverSwitchButton.disabled = false;
           setStatus("Nao foi possivel aplicar a troca.");
         });
-    });
-  }
-
-  if (restoreButton) {
-    restoreButton.addEventListener("click", function () {
-      if (!window.confirm("Restaurar o servidor primario e voltar para ele?")) {
-        return;
-      }
-
-      if (!socket || !socket.connected || activeRole !== "backup") {
-        setStatus("Nao foi possivel aplicar a troca.");
-        return;
-      }
-
-      restoreButton.disabled = true;
-      setStatus("Aplicando troca...");
-      socket.emit("restore_primary");
     });
   }
 

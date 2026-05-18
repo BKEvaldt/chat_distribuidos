@@ -16,7 +16,7 @@ envVarGroups:
       - key: ENABLE_FAILOVER_CONTROL
         value: "1"
       - key: SHOW_FAILOVER_CONTROLS
-        value: "0"
+        value: "1"
       - key: HEARTBEAT_INTERVAL
         value: "2"
       - key: FAILURE_THRESHOLD

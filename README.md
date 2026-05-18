@@ -91,7 +91,7 @@ Tabelas:
 - `messages`: historico de mensagens.
 - `server_state`: indica se o servidor ativo atual e `primary` ou `backup`.
 
-O historico mostra apenas mensagens de usuarios. Eventos como entrada, saida, failover e restauracao aparecem como notificacoes temporarias na interface.
+O historico mostra apenas mensagens de usuarios. Eventos de failover e restauracao ficam visiveis nos logs do Render.
 
 ## Login Entre Dominios
 
@@ -101,9 +101,9 @@ Por isso, a pagina gera um token assinado em `socket_auth.py`. Esse token e envi
 
 ## Failover
 
-Com `ENABLE_FAILOVER_CONTROL=1`, a interface do primario mostra **Derrubar primario**.
+Com `ENABLE_FAILOVER_CONTROL=1` e `SHOW_FAILOVER_CONTROLS=1`, a interface mostra o botao **Trocar servidor**.
 
-Ao clicar:
+Quando o servidor ativo e o primario, ao clicar:
 
 1. o primario chama `POST /promote` no backup;
 2. o backup grava `backup` em `server_state`;
@@ -112,9 +112,7 @@ Ao clicar:
 5. como `server_state=backup`, o primario reiniciado fica em espera;
 6. o navegador reconecta ao backup.
 
-No backup aparece **Voltar ao primario**.
-
-Ao clicar:
+Quando o servidor ativo e o backup, o mesmo botao restaura o primario:
 
 1. o backup grava `primary` em `server_state`;
 2. espera o `/health` do primario confirmar que esta ativo;

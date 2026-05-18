@@ -17,11 +17,8 @@
           </div>
           <div class="topbar-actions">
             <span class="user-pill">{{ current_username }}</span>
-            {% if failover_control_enabled %}
-              <button id="failoverButton" class="danger-button" type="button" hidden>Derrubar primario</button>
-            {% endif %}
-            {% if restore_control_enabled %}
-              <button id="restoreButton" class="secondary-button" type="button" hidden>Voltar ao primario</button>
+            {% if failover_control_enabled or restore_control_enabled %}
+              <button id="serverSwitchButton" class="secondary-button" type="button" hidden>Trocar servidor</button>
             {% endif %}
             <form action="{{ url_for('logout') }}" method="post">
               <button class="secondary-button" type="submit">Sair</button>
