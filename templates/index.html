@@ -17,7 +17,6 @@
           </div>
           <div class="topbar-actions">
             <span class="user-pill">{{ current_username }}</span>
-            <span class="role-pill">{{ server_role }}</span>
             {% if failover_control_enabled %}
               <button id="failoverButton" class="danger-button" type="button" hidden>Derrubar primario</button>
             {% endif %}
