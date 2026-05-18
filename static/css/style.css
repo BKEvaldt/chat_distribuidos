@@ -181,8 +181,31 @@ input:focus {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow-y: auto;
+  min-height: 0;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
   padding: 20px;
+  scrollbar-color: rgba(23, 107, 135, 0.48) #edf2f7;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.messages::-webkit-scrollbar {
+  width: 10px;
+}
+
+.messages::-webkit-scrollbar-track {
+  background: #edf2f7;
+}
+
+.messages::-webkit-scrollbar-thumb {
+  border: 2px solid #edf2f7;
+  border-radius: 999px;
+  background: rgba(23, 107, 135, 0.58);
+}
+
+.messages::-webkit-scrollbar-thumb:hover {
+  background: rgba(15, 80, 103, 0.72);
 }
 
 .message {
