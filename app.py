@@ -87,7 +87,6 @@ SHOW_FAILOVER_CONTROLS = os.getenv("SHOW_FAILOVER_CONTROLS", "1").lower() in {
 
 state_lock = threading.RLock()
 connected_users = {}
-authenticated_sockets = {}
 background_threads_started = False
 
 replication_queue = queue.Queue()
@@ -218,7 +217,6 @@ def emit_client_thread_error(session, exc):
 
 def remove_client_state(sid):
     with state_lock:
-        authenticated_sockets.pop(sid, None)
         user = connected_users.pop(sid, None)
 
     if not user:
@@ -337,7 +335,6 @@ client_threads = ClientThreadManager(
 def index():
     return render_template(
         "index.html",
-        server_role="primary",
         primary_url=PRIMARY_PUBLIC_URL,
         backup_url=BACKUP_PUBLIC_URL,
         current_username=current_user.username,
@@ -416,12 +413,6 @@ def handle_connect(auth=None):
         return False
 
     active = primary_is_active()
-
-    with state_lock:
-        authenticated_sockets[request.sid] = {
-            "user_id": user.id,
-            "name": user.username,
-        }
 
     client_threads.start(request.sid, user.id, user.username)
 

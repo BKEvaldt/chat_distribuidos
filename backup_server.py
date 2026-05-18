@@ -89,7 +89,6 @@ restore_lock = threading.Lock()
 is_active = False
 failure_count = 0
 connected_users = {}
-authenticated_sockets = {}
 replicated_primary_users = []
 background_threads_started = False
 
@@ -249,7 +248,6 @@ def emit_client_thread_error(session, exc):
 
 def remove_client_state(sid):
     with state_lock:
-        authenticated_sockets.pop(sid, None)
         user = connected_users.pop(sid, None)
 
     active = backup_is_active()
@@ -396,7 +394,6 @@ client_threads = ClientThreadManager(
 def index():
     return render_template(
         "index.html",
-        server_role="backup",
         primary_url=PRIMARY_PUBLIC_URL,
         backup_url=BACKUP_PUBLIC_URL,
         current_username=current_user.username,
@@ -479,12 +476,6 @@ def handle_connect(auth=None):
         return False
 
     active = backup_is_active()
-    with state_lock:
-        authenticated_sockets[request.sid] = {
-            "user_id": user.id,
-            "name": user.username,
-        }
-
     client_threads.start(request.sid, user.id, user.username)
 
     emit(

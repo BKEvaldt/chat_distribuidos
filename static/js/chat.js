@@ -129,11 +129,6 @@
     const item = document.createElement("article");
     item.className = "message";
 
-    if (message.type === "system") {
-      showToast(message.text, message.level);
-      return;
-    }
-
     if (message.user === userName) {
       item.classList.add("mine");
     }
