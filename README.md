@@ -17,6 +17,14 @@ O banco esta com `plan: free` no `render.yaml`. No Render, bancos PostgreSQL gra
 
 O navegador acessa a URL publica do primario. O primario replica mensagens para o backup e o backup monitora o primario por heartbeat. No Blueprint atual, essas chamadas usam as URLs publicas dos servicos para evitar dependencia circular durante a criacao inicial dos recursos no Render.
 
+## Requisitos de Concorrencia
+
+O sistema atende comunicacao simultanea entre multiplos usuarios usando Flask-SocketIO e conexoes WebSocket/polling. As mensagens recebidas por um usuario sao enviadas aos demais com `socketio.emit`, mantendo varios clientes conectados ao mesmo tempo.
+
+Para cumprir o requisito de thread por conexao no servidor, cada conexao Socket.IO cria uma sessao em `client_threads.py`. No evento `connect`, `app.py` ou `backup_server.py` chama `ClientThreadManager.start(...)`, que instancia uma `threading.Thread` dedicada ao `sid` daquele cliente. Os eventos do cliente, como `join`, `send_message`, `restore_primary` e `disconnect`, sao colocados em uma fila (`queue.Queue`) e processados pela thread dedicada daquela conexao. Os logs mostram quando cada thread de cliente inicia e encerra.
+
+Para cumprir o requisito de thread dedicada a recepcao no cliente web, a conexao Socket.IO foi movida para `static/js/chat-worker.js`. Esse arquivo roda como Web Worker, que e a forma de thread separada no navegador. O worker recebe eventos como `chat_message`, `message_history`, `users_update` e `chat_error`, e envia os dados para `static/js/chat.js`, que fica responsavel apenas por atualizar a interface.
+
 ## Estrutura
 
 ```text
@@ -26,6 +34,7 @@ O navegador acessa a URL publica do primario. O primario replica mensagens para 
 ├── backup_server.py
 ├── backup_wsgi.py
 ├── chat_storage.py
+├── client_threads.py
 ├── extensions.py
 ├── gunicorn.conf.py
 ├── models.py
@@ -37,6 +46,9 @@ O navegador acessa a URL publica do primario. O primario replica mensagens para 
 ├── migrations/
 ├── templates/
 └── static/
+    └── js/
+        ├── chat.js
+        └── chat-worker.js
 ```
 
 ## Deploy

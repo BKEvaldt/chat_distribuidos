@@ -11,6 +11,7 @@ from flask_socketio import SocketIO, emit
 
 from auth import register_auth_routes
 from chat_storage import latest_messages, now_iso, store_message
+from client_threads import ClientThreadManager
 from extensions import db, login_manager, migrate
 from server_state import BACKUP_ROLE, PRIMARY_ROLE, active_role, set_active_role
 from socket_auth import generate_socket_token, load_socket_user
@@ -164,11 +165,6 @@ def socket_user_from_auth(auth):
     return load_socket_user(token)
 
 
-def socket_identity():
-    with state_lock:
-        return authenticated_sockets.get(request.sid)
-
-
 def users_snapshot():
     with state_lock:
         return [
@@ -243,6 +239,158 @@ def heartbeat_worker():
             time.sleep(HEARTBEAT_INTERVAL)
 
 
+def emit_client_thread_error(session, exc):
+    socketio.emit(
+        "chat_error",
+        {"message": "Erro interno ao processar evento."},
+        to=session.sid,
+    )
+
+
+def remove_client_state(sid):
+    with state_lock:
+        authenticated_sockets.pop(sid, None)
+        user = connected_users.pop(sid, None)
+
+    active = backup_is_active()
+    if active and user:
+        socketio.emit(
+            "chat_notification",
+            notification_payload(f"{user['name']} saiu do chat."),
+        )
+        socketio.emit("users_update", users_snapshot())
+
+
+def handle_client_join(session):
+    active = backup_is_active()
+    if not active:
+        socketio.emit(
+            "chat_error",
+            {"message": "Backup ainda nao esta ativo."},
+            to=session.sid,
+        )
+        return
+
+    with state_lock:
+        previous = connected_users.get(session.sid)
+        connected_users[session.sid] = {
+            "user_id": session.user_id,
+            "name": session.name,
+            "joined_at": previous["joined_at"] if previous else now_iso(),
+        }
+
+    if not previous:
+        socketio.emit(
+            "chat_notification",
+            notification_payload(f"{session.name} entrou no chat."),
+            skip_sid=session.sid,
+        )
+
+    socketio.emit("message_history", latest_messages(MAX_HISTORY), to=session.sid)
+    socketio.emit("users_update", users_snapshot())
+
+
+def handle_client_send_message(session, data):
+    active = backup_is_active()
+    if not active:
+        socketio.emit(
+            "chat_error",
+            {"message": "Backup ainda nao esta ativo."},
+            to=session.sid,
+        )
+        return
+
+    with state_lock:
+        user = connected_users.get(session.sid)
+
+    if not user:
+        socketio.emit(
+            "chat_error",
+            {"message": "Entre no chat antes de enviar mensagens."},
+            to=session.sid,
+        )
+        return
+
+    text = clean_text(data.get("text") if isinstance(data, dict) else "", 1000)
+    if not text:
+        socketio.emit(
+            "chat_error",
+            {"message": "A mensagem nao pode estar vazia."},
+            to=session.sid,
+        )
+        return
+
+    message = {
+        "id": str(uuid4()),
+        "type": "user",
+        "user": user["name"],
+        "text": text,
+        "timestamp": now_iso(),
+    }
+    message = store_message(message, user_id=user["user_id"])
+    socketio.emit("chat_message", message)
+
+
+def handle_client_restore_primary(session):
+    if not ENABLE_FAILOVER_CONTROL:
+        socketio.emit(
+            "chat_error",
+            {"message": "Controle de failover desativado."},
+            to=session.sid,
+        )
+        return
+
+    if not backup_is_active():
+        socketio.emit(
+            "chat_error",
+            {"message": "Backup nao esta ativo."},
+            to=session.sid,
+        )
+        return
+
+    if not restore_primary():
+        socketio.emit(
+            "chat_error",
+            {"message": "Nao foi possivel restaurar o primario."},
+            to=session.sid,
+        )
+        return
+
+    logging.info("Servidor primario restaurado. Clientes serao reconectados.")
+    socketio.emit("users_update", users_snapshot())
+    socketio.emit(
+        "primary_restored",
+        {"role": "primary", "active": True, "server_url": PRIMARY_PUBLIC_URL},
+    )
+
+
+def dispatch_backup_client_event(session, event):
+    event_type = event.get("type")
+
+    if event_type == "join":
+        handle_client_join(session)
+    elif event_type == "send_message":
+        handle_client_send_message(session, event.get("data") or {})
+    elif event_type == "restore_primary":
+        handle_client_restore_primary(session)
+    elif event_type == "disconnect":
+        remove_client_state(session.sid)
+    else:
+        socketio.emit(
+            "chat_error",
+            {"message": "Evento desconhecido."},
+            to=session.sid,
+        )
+
+
+client_threads = ClientThreadManager(
+    app,
+    role="backup",
+    dispatch_event=dispatch_backup_client_event,
+    error_handler=emit_client_thread_error,
+)
+
+
 @app.route("/")
 @login_required
 def index():
@@ -270,6 +418,7 @@ def health():
                 "failures": failure_count,
                 "users": len(connected_users),
                 "replicated_primary_users": len(replicated_primary_users),
+                "client_threads": client_threads.count(),
                 "time": now_iso(),
             }
         )
@@ -336,6 +485,8 @@ def handle_connect(auth=None):
             "name": user.username,
         }
 
+    client_threads.start(request.sid, user.id, user.username)
+
     emit(
         "server_info",
         {
@@ -354,110 +505,29 @@ def handle_connect(auth=None):
 
 @socketio.on("join")
 def handle_join(data=None):
-    identity = socket_identity()
-    if not identity:
+    if not client_threads.enqueue(request.sid, {"type": "join"}):
         emit("chat_error", {"message": "Entre para acessar o chat."})
-        return
-
-    active = backup_is_active()
-    if not active:
-        emit("chat_error", {"message": "Backup ainda nao esta ativo."})
-        return
-
-    name = identity["name"]
-    with state_lock:
-        previous = connected_users.get(request.sid)
-        connected_users[request.sid] = {
-            "user_id": identity["user_id"],
-            "name": name,
-            "joined_at": previous["joined_at"] if previous else now_iso(),
-        }
-
-    if not previous:
-        socketio.emit(
-            "chat_notification",
-            notification_payload(f"{name} entrou no chat."),
-            skip_sid=request.sid,
-        )
-
-    emit("message_history", latest_messages(MAX_HISTORY))
-
-    socketio.emit("users_update", users_snapshot())
 
 
 @socketio.on("send_message")
 def handle_send_message(data):
-    if not socket_identity():
+    if not client_threads.enqueue(
+        request.sid,
+        {"type": "send_message", "data": data or {}},
+    ):
         emit("chat_error", {"message": "Entre para acessar o chat."})
-        return
-
-    with state_lock:
-        user = connected_users.get(request.sid)
-
-    active = backup_is_active()
-    if not active:
-        emit("chat_error", {"message": "Backup ainda nao esta ativo."})
-        return
-
-    if not user:
-        emit("chat_error", {"message": "Entre no chat antes de enviar mensagens."})
-        return
-
-    text = clean_text(data.get("text") if isinstance(data, dict) else "", 1000)
-    if not text:
-        emit("chat_error", {"message": "A mensagem nao pode estar vazia."})
-        return
-
-    message = {
-        "id": str(uuid4()),
-        "type": "user",
-        "user": user["name"],
-        "text": text,
-        "timestamp": now_iso(),
-    }
-    message = store_message(message, user_id=user["user_id"])
-    socketio.emit("chat_message", message)
 
 
 @socketio.on("restore_primary")
 def handle_restore_primary():
-    if not socket_identity():
+    if not client_threads.enqueue(request.sid, {"type": "restore_primary"}):
         emit("chat_error", {"message": "Entre para acessar o chat."})
-        return
-
-    if not ENABLE_FAILOVER_CONTROL:
-        emit("chat_error", {"message": "Controle de failover desativado."})
-        return
-
-    if not backup_is_active():
-        emit("chat_error", {"message": "Backup nao esta ativo."})
-        return
-
-    if not restore_primary():
-        emit("chat_error", {"message": "Nao foi possivel restaurar o primario."})
-        return
-
-    logging.info("Servidor primario restaurado. Clientes serao reconectados.")
-    socketio.emit("users_update", users_snapshot())
-    socketio.emit(
-        "primary_restored",
-        {"role": "primary", "active": True, "server_url": PRIMARY_PUBLIC_URL},
-    )
 
 
 @socketio.on("disconnect")
 def handle_disconnect():
-    with state_lock:
-        authenticated_sockets.pop(request.sid, None)
-        user = connected_users.pop(request.sid, None)
-
-    active = backup_is_active()
-    if active and user:
-        socketio.emit(
-            "chat_notification",
-            notification_payload(f"{user['name']} saiu do chat."),
-        )
-        socketio.emit("users_update", users_snapshot())
+    if not client_threads.stop(request.sid):
+        remove_client_state(request.sid)
 
 
 @socketio.on_error_default

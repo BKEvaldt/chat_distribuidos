@@ -12,6 +12,7 @@ from flask_socketio import SocketIO, emit
 
 from auth import register_auth_routes
 from chat_storage import latest_messages, now_iso, store_message
+from client_threads import ClientThreadManager
 from extensions import db, login_manager, migrate
 from server_state import BACKUP_ROLE, PRIMARY_ROLE, active_role, set_active_role
 from socket_auth import generate_socket_token, load_socket_user
@@ -139,11 +140,6 @@ def socket_user_from_auth(auth):
     return load_socket_user(token)
 
 
-def socket_identity():
-    with state_lock:
-        return authenticated_sockets.get(request.sid)
-
-
 def shutdown_primary_process():
     logging.warning("Primario encerrando por failover manual.")
     stop_threads.set()
@@ -212,6 +208,130 @@ def monitor_worker():
         stop_threads.wait(30)
 
 
+def emit_client_thread_error(session, exc):
+    socketio.emit(
+        "chat_error",
+        {"message": "Erro interno ao processar evento."},
+        to=session.sid,
+    )
+
+
+def remove_client_state(sid):
+    with state_lock:
+        authenticated_sockets.pop(sid, None)
+        user = connected_users.pop(sid, None)
+
+    if not user:
+        return
+
+    socketio.emit(
+        "chat_notification",
+        notification_payload(f"{user['name']} saiu do chat."),
+    )
+
+    snapshot = users_snapshot()
+    socketio.emit("users_update", snapshot)
+    replicate_event("users_snapshot", snapshot)
+
+
+def handle_client_join(session):
+    if not primary_is_active():
+        socketio.emit(
+            "chat_error",
+            {"message": "Servidor primario em espera."},
+            to=session.sid,
+        )
+        return
+
+    with state_lock:
+        previous = connected_users.get(session.sid)
+        connected_users[session.sid] = {
+            "user_id": session.user_id,
+            "name": session.name,
+            "joined_at": previous["joined_at"] if previous else now_iso(),
+        }
+
+    if not previous:
+        socketio.emit(
+            "chat_notification",
+            notification_payload(f"{session.name} entrou no chat."),
+            skip_sid=session.sid,
+        )
+
+    socketio.emit("message_history", latest_messages(MAX_HISTORY), to=session.sid)
+
+    snapshot = users_snapshot()
+    socketio.emit("users_update", snapshot)
+    replicate_event("users_snapshot", snapshot)
+
+
+def handle_client_send_message(session, data):
+    if not primary_is_active():
+        socketio.emit(
+            "chat_error",
+            {"message": "Servidor primario em espera."},
+            to=session.sid,
+        )
+        return
+
+    text = clean_text(data.get("text") if isinstance(data, dict) else "", 1000)
+    if not text:
+        socketio.emit(
+            "chat_error",
+            {"message": "A mensagem nao pode estar vazia."},
+            to=session.sid,
+        )
+        return
+
+    with state_lock:
+        user = connected_users.get(session.sid)
+
+    if not user:
+        socketio.emit(
+            "chat_error",
+            {"message": "Entre no chat antes de enviar mensagens."},
+            to=session.sid,
+        )
+        return
+
+    message = {
+        "id": str(uuid4()),
+        "type": "user",
+        "user": user["name"],
+        "text": text,
+        "timestamp": now_iso(),
+    }
+    message = add_message(message, user_id=user["user_id"])
+
+    socketio.emit("chat_message", message)
+    replicate_event("message", message)
+
+
+def dispatch_primary_client_event(session, event):
+    event_type = event.get("type")
+
+    if event_type == "join":
+        handle_client_join(session)
+    elif event_type == "send_message":
+        handle_client_send_message(session, event.get("data") or {})
+    elif event_type == "disconnect":
+        remove_client_state(session.sid)
+    else:
+        socketio.emit(
+            "chat_error",
+            {"message": "Evento desconhecido."},
+            to=session.sid,
+        )
+
+
+client_threads = ClientThreadManager(
+    app,
+    role="primary",
+    dispatch_event=dispatch_primary_client_event,
+    error_handler=emit_client_thread_error,
+)
+
+
 @app.route("/")
 @login_required
 def index():
@@ -236,6 +356,7 @@ def health():
             "role": "primary",
             "active": primary_is_active(),
             "users": len(users_snapshot()),
+            "client_threads": client_threads.count(),
             "time": now_iso(),
         }
     )
@@ -302,6 +423,8 @@ def handle_connect(auth=None):
             "name": user.username,
         }
 
+    client_threads.start(request.sid, user.id, user.username)
+
     emit(
         "server_info",
         {
@@ -314,88 +437,23 @@ def handle_connect(auth=None):
 
 @socketio.on("join")
 def handle_join(data=None):
-    if not primary_is_active():
-        emit("chat_error", {"message": "Servidor primario em espera."})
-        return
-
-    identity = socket_identity()
-    if not identity:
+    if not client_threads.enqueue(request.sid, {"type": "join"}):
         emit("chat_error", {"message": "Entre para acessar o chat."})
-        return
-
-    name = identity["name"]
-    with state_lock:
-        previous = connected_users.get(request.sid)
-        connected_users[request.sid] = {
-            "user_id": identity["user_id"],
-            "name": name,
-            "joined_at": previous["joined_at"] if previous else now_iso(),
-        }
-
-    if not previous:
-        socketio.emit(
-            "chat_notification",
-            notification_payload(f"{name} entrou no chat."),
-            skip_sid=request.sid,
-        )
-
-    emit("message_history", latest_messages(MAX_HISTORY))
-
-    snapshot = users_snapshot()
-    socketio.emit("users_update", snapshot)
-    replicate_event("users_snapshot", snapshot)
 
 
 @socketio.on("send_message")
 def handle_send_message(data):
-    if not primary_is_active():
-        emit("chat_error", {"message": "Servidor primario em espera."})
-        return
-
-    if not socket_identity():
+    if not client_threads.enqueue(
+        request.sid,
+        {"type": "send_message", "data": data or {}},
+    ):
         emit("chat_error", {"message": "Entre para acessar o chat."})
-        return
-
-    text = clean_text(data.get("text") if isinstance(data, dict) else "", 1000)
-    if not text:
-        emit("chat_error", {"message": "A mensagem nao pode estar vazia."})
-        return
-
-    with state_lock:
-        user = connected_users.get(request.sid)
-
-    if not user:
-        emit("chat_error", {"message": "Entre no chat antes de enviar mensagens."})
-        return
-
-    message = {
-        "id": str(uuid4()),
-        "type": "user",
-        "user": user["name"],
-        "text": text,
-        "timestamp": now_iso(),
-    }
-    message = add_message(message, user_id=user["user_id"])
-
-    socketio.emit("chat_message", message)
-    replicate_event("message", message)
 
 
 @socketio.on("disconnect")
 def handle_disconnect():
-    with state_lock:
-        authenticated_sockets.pop(request.sid, None)
-        user = connected_users.pop(request.sid, None)
-
-    if user:
-        socketio.emit(
-            "chat_notification",
-            notification_payload(f"{user['name']} saiu do chat."),
-        )
-
-        snapshot = users_snapshot()
-        socketio.emit("users_update", snapshot)
-        replicate_event("users_snapshot", snapshot)
+    if not client_threads.stop(request.sid):
+        remove_client_state(request.sid)
 
 
 @socketio.on_error_default

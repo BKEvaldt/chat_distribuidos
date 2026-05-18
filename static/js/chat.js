@@ -8,182 +8,92 @@
   const usersList = document.getElementById("usersList");
   const serverSwitchButton = document.getElementById("serverSwitchButton");
 
-  const candidates = uniqueUrls([
-    config.primaryUrl,
-    config.backupUrl,
-    window.location.origin
-  ]);
-
-  let socket = null;
-  let candidateIndex = 0;
-  let activeUrl = "";
-  let activeRole = "";
-  let joined = false;
+  let chatWorker = null;
   let userName = config.currentUser || "";
-  let reconnectTimer = null;
-  let reconnectNoticeTimer = null;
-
-  function normalizeUrl(url) {
-    return String(url || "").replace(/\/$/, "");
-  }
-
-  function uniqueUrls(urls) {
-    return urls.filter(Boolean).reduce((acc, url) => {
-      const normalized = normalizeUrl(url);
-      if (!acc.includes(normalized)) {
-        acc.push(normalized);
-      }
-      return acc;
-    }, []);
-  }
 
   function setStatus(text) {
     serverStatus.textContent = text;
   }
 
-  function setConnectedStatus() {
-    setStatus("Conectado ao chat");
-  }
-
-  function updateServerControls(role, active) {
+  function updateServerControls(active) {
     if (serverSwitchButton) {
-      serverSwitchButton.hidden = !(active && ["primary", "backup"].includes(role));
+      serverSwitchButton.hidden = !active;
       serverSwitchButton.disabled = false;
     }
   }
 
-  function preferCandidate(url) {
-    const normalized = normalizeUrl(url);
-    const index = candidates.indexOf(normalized);
-    if (index >= 0) {
-      candidateIndex = index;
-    }
-  }
-
-  function scheduleReconnect(delay) {
-    window.clearTimeout(reconnectTimer);
-    reconnectTimer = window.setTimeout(connectToCandidate, delay);
-  }
-
-  function clearReconnectNotice() {
-    window.clearTimeout(reconnectNoticeTimer);
-  }
-
-  function scheduleReconnectNotice() {
-    clearReconnectNotice();
-    reconnectNoticeTimer = window.setTimeout(function () {
-      if (!socket || !socket.connected) {
-        setStatus("Reconectando...");
-      }
-    }, 2500);
-  }
-
-  function connectToCandidate() {
-    if (!candidates.length) {
-      setStatus("Chat indisponivel.");
+  function startChatWorker() {
+    if (!window.Worker) {
+      setStatus("Este navegador nao suporta recepcao em thread separada.");
       return;
     }
 
-    const url = candidates[candidateIndex % candidates.length];
-    candidateIndex += 1;
+    chatWorker = new Worker(config.workerUrl || "/static/js/chat-worker.js");
+    chatWorker.onmessage = handleWorkerMessage;
+    chatWorker.onerror = function () {
+      setStatus("Nao foi possivel iniciar a thread de recepcao.");
+      updateServerControls(false);
+    };
+    chatWorker.postMessage({ type: "init", config: config });
+  }
 
-    if (!activeUrl) {
-      setStatus("Conectando...");
+  function handleWorkerMessage(event) {
+    const data = event.data || {};
+
+    if (data.type === "status") {
+      setStatus(data.text || "");
+      return;
     }
 
-    if (socket) {
-      socket.removeAllListeners();
-      socket.disconnect();
+    if (data.type === "server_controls") {
+      updateServerControls(Boolean(data.active));
+      return;
     }
 
-    socket = io(url, {
-      auth: { token: config.socketAuthToken || "" },
-      transports: ["websocket", "polling"],
-      reconnection: false,
-      timeout: 3000
-    });
-
-    socket.on("connect_error", function () {
-      scheduleReconnectNotice();
-      scheduleReconnect(900);
-    });
-
-    socket.on("disconnect", function () {
-      joined = false;
-      scheduleReconnectNotice();
-      scheduleReconnect(900);
-    });
-
-    socket.on("server_info", function (info) {
-      if (!info.active) {
-        updateServerControls(info.role, false);
-        scheduleReconnectNotice();
-        socket.disconnect();
-        scheduleReconnect(900);
-        return;
-      }
-
-      activeUrl = info.server_url || url;
-      activeRole = info.role || "servidor";
-      clearReconnectNotice();
-      setConnectedStatus();
-      updateServerControls(activeRole, true);
-
-      if (userName) {
-        joinChat(userName);
-      }
-    });
-
-    socket.on("server_promoted", function (info) {
-      activeUrl = info.server_url || activeUrl;
-      activeRole = info.role || "backup";
-      clearReconnectNotice();
-      setConnectedStatus();
-      updateServerControls(activeRole, true);
-    });
-
-    socket.on("primary_restored", function (info) {
-      preferCandidate(info.server_url || config.primaryUrl);
-      updateServerControls("backup", false);
-      if (socket) {
-        socket.disconnect();
-      }
-      scheduleReconnect(900);
-    });
-
-    socket.on("message_history", function (history) {
+    if (data.type === "message_history") {
       messages.innerHTML = "";
-      history.forEach(renderMessage);
+      (data.history || []).forEach(renderMessage);
       scrollToBottom();
-    });
+      return;
+    }
 
-    socket.on("chat_message", function (message) {
+    if (data.type === "chat_message") {
+      const message = data.message || {};
       const shouldStickToBottom = isNearBottom() || message.user === userName;
       renderMessage(message);
       if (shouldStickToBottom) {
         scrollToBottom();
       }
-    });
+      return;
+    }
 
-    socket.on("chat_notification", function (notification) {
-      if (notification && notification.text) {
-        if (isPresenceNotification(notification.text)) {
-          return;
-        }
+    if (data.type === "chat_notification") {
+      const notification = data.notification || {};
+      if (notification.text && !isPresenceNotification(notification.text)) {
         showToast(notification.text, notification.level);
       }
-    });
+      return;
+    }
 
-    socket.on("users_update", renderUsers);
+    if (data.type === "users_update") {
+      renderUsers(data.users || []);
+      return;
+    }
 
-    socket.on("chat_error", function (error) {
-      if (error && error.message) {
-        if (isServerRoutingMessage(error.message)) {
-          return;
-        }
+    if (data.type === "chat_error") {
+      const error = data.error || {};
+      if (error.message && !isServerRoutingMessage(error.message)) {
         setStatus(error.message);
       }
-    });
+      return;
+    }
+
+    if (data.type === "switch_failed") {
+      if (serverSwitchButton) {
+        serverSwitchButton.disabled = false;
+      }
+      setStatus("Nao foi possivel aplicar a troca.");
+    }
   }
 
   function isServerRoutingMessage(message) {
@@ -196,17 +106,6 @@
 
   function isPresenceNotification(message) {
     return /\s(entrou|saiu) no chat\.$/.test(message);
-  }
-
-  function joinChat(name) {
-    const cleanName = String(name || "").trim().slice(0, 32);
-    if (!cleanName || !socket || !socket.connected) {
-      return;
-    }
-
-    userName = cleanName;
-    socket.emit("join");
-    joined = true;
   }
 
   function renderUsers(users) {
@@ -311,15 +210,11 @@
       return;
     }
 
-    if (!joined) {
-      joinChat(userName);
-    }
-
-    if (!text || !socket || !socket.connected) {
+    if (!text || !chatWorker) {
       return;
     }
 
-    socket.emit("send_message", { text: text });
+    chatWorker.postMessage({ type: "send_message", text: text });
     messageInput.value = "";
     messageInput.focus();
   });
@@ -330,51 +225,18 @@
         return;
       }
 
+      if (!chatWorker) {
+        setStatus("Nao foi possivel aplicar a troca.");
+        return;
+      }
+
       serverSwitchButton.disabled = true;
       setStatus("Aplicando troca...");
-
-      if (activeRole === "backup") {
-        if (!socket || !socket.connected) {
-          setStatus("Nao foi possivel aplicar a troca.");
-          serverSwitchButton.disabled = false;
-          return;
-        }
-
-        socket.emit("restore_primary");
-        return;
-      }
-
-      if (activeRole !== "primary" || !config.failoverUrl) {
-        setStatus("Nao foi possivel aplicar a troca.");
-        serverSwitchButton.disabled = false;
-        return;
-      }
-
-      fetch(config.failoverUrl, {
-        method: "POST",
-        headers: { "Accept": "application/json" }
-      })
-        .then(function (response) {
-          if (!response.ok) {
-            throw new Error("Falha ao acionar o backup.");
-          }
-          return response.json();
-        })
-        .then(function (data) {
-          preferCandidate(data.backup_url || config.backupUrl);
-          if (socket) {
-            socket.disconnect();
-          }
-          scheduleReconnect(1200);
-        })
-        .catch(function () {
-          serverSwitchButton.disabled = false;
-          setStatus("Nao foi possivel aplicar a troca.");
-        });
+      chatWorker.postMessage({ type: "switch_server" });
     });
   }
 
   renderUsers([]);
-  updateServerControls("", false);
-  connectToCandidate();
+  updateServerControls(false);
+  startChatWorker();
 })();

@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Chat Distribuido</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -49,7 +48,8 @@
         pageRole: {{ server_role|tojson }},
         currentUser: {{ current_username|tojson }},
         socketAuthToken: {{ socket_auth_token|tojson }},
-        failoverUrl: {{ failover_url|tojson }}
+        failoverUrl: {{ failover_url|tojson }},
+        workerUrl: {{ url_for('static', filename='js/chat-worker.js')|tojson }}
       };
     </script>
     <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
