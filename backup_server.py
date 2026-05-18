@@ -449,6 +449,11 @@ def health():
         )
 
 
+@app.route("/ready")
+def ready():
+    return jsonify({"ok": True, "role": "backup"})
+
+
 @app.route("/replicate", methods=["POST"])
 def replicate():
     payload = request.get_json(silent=True) or {}

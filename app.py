@@ -375,6 +375,11 @@ def health():
     )
 
 
+@app.route("/ready")
+def ready():
+    return jsonify({"ok": True, "role": "primary"})
+
+
 @app.route("/messages")
 @login_required
 def messages():
