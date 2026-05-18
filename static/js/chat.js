@@ -158,8 +158,11 @@
     });
 
     socket.on("chat_message", function (message) {
+      const shouldStickToBottom = isNearBottom() || message.user === userName;
       renderMessage(message);
-      scrollToBottom();
+      if (shouldStickToBottom) {
+        scrollToBottom();
+      }
     });
 
     socket.on("chat_notification", function (notification) {
@@ -293,6 +296,10 @@
 
   function scrollToBottom() {
     messages.scrollTop = messages.scrollHeight;
+  }
+
+  function isNearBottom() {
+    return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 80;
   }
 
   messageForm.addEventListener("submit", function (event) {
