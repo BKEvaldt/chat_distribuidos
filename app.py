@@ -140,7 +140,7 @@ def socket_user_from_auth(auth):
 
 
 def shutdown_primary_process():
-    logging.warning("Primario encerrando por failover manual.")
+    logging.warning("FAILOVER_PRIMARIO_ENCERRANDO motivo=failover_manual")
     stop_threads.set()
     os.kill(os.getpid(), signal.SIGTERM)
 
@@ -174,12 +174,12 @@ def replication_worker():
             response = requests.post(BACKUP_REPLICATION_URL, json=item, timeout=2)
             if response.status_code >= 400:
                 logging.warning(
-                    "Backup recusou replicacao %s: HTTP %s",
+                    "REPLICACAO_RECUSADA evento=%s http_status=%s",
                     item["event"],
                     response.status_code,
                 )
         except requests.RequestException as exc:
-            logging.warning("Backup indisponivel para replicacao: %s", exc)
+            logging.warning("REPLICACAO_BACKUP_INDISPONIVEL erro=%s", exc)
         finally:
             replication_queue.task_done()
 
@@ -200,7 +200,7 @@ def monitor_worker():
             backup_state = {"error": str(exc)}
 
         logging.info(
-            "Principal ativo. Usuarios=%s Backup=%s",
+            "MONITOR_PRIMARIO_EM_EXECUCAO usuarios_locais=%s estado_backup=%s",
             len(users_snapshot()),
             backup_state,
         )
@@ -222,6 +222,11 @@ def remove_client_state(sid):
     if not user:
         return
 
+    logging.info(
+        "CHAT_USUARIO_SAIU role=primary sid=%s usuario=%s",
+        sid,
+        user["name"],
+    )
     socketio.emit(
         "chat_notification",
         notification_payload(f"{user['name']} saiu do chat."),
@@ -250,6 +255,11 @@ def handle_client_join(session):
         }
 
     if not previous:
+        logging.info(
+            "CHAT_USUARIO_ENTROU role=primary sid=%s usuario=%s",
+            session.sid,
+            session.name,
+        )
         socketio.emit(
             "chat_notification",
             notification_payload(f"{session.name} entrou no chat."),
@@ -301,6 +311,12 @@ def handle_client_send_message(session, data):
     }
     message = add_message(message, user_id=user["user_id"])
 
+    logging.info(
+        "CHAT_MENSAGEM_RECEBIDA role=primary sid=%s usuario=%s tamanho=%s",
+        session.sid,
+        user["name"],
+        len(text),
+    )
     socketio.emit("chat_message", message)
     replicate_event("message", message)
 
@@ -371,7 +387,7 @@ def trigger_failover():
     if not ENABLE_FAILOVER_CONTROL:
         return jsonify({"ok": False, "error": "controle de failover desativado"}), 404
 
-    logging.warning("Failover manual solicitado por %s.", current_user.username)
+    logging.warning("FAILOVER_MANUAL_SOLICITADO usuario=%s", current_user.username)
 
     payload = {
         "token": REPLICATION_TOKEN,
@@ -383,7 +399,7 @@ def trigger_failover():
         response = requests.post(BACKUP_PROMOTE_URL, json=payload, timeout=2)
         response.raise_for_status()
     except requests.RequestException as exc:
-        logging.warning("Nao foi possivel promover o backup manualmente: %s", exc)
+        logging.warning("FAILOVER_MANUAL_FALHOU erro=%s", exc)
         return (
             jsonify(
                 {
@@ -395,6 +411,7 @@ def trigger_failover():
         )
 
     set_active_role(BACKUP_ROLE)
+    logging.warning("FAILOVER_BACKUP_PROMOVIDO origem=primario usuario=%s", current_user.username)
     threading.Timer(0.7, shutdown_primary_process).start()
     return jsonify(
         {

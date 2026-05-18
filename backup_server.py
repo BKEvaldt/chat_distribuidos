@@ -179,7 +179,7 @@ def users_snapshot():
         ]
 
 
-def promote_to_active():
+def promote_to_active(reason="falhas_heartbeat"):
     global failure_count, is_active
     with state_lock:
         if is_active:
@@ -190,7 +190,11 @@ def promote_to_active():
 
     set_active_role(BACKUP_ROLE)
 
-    logging.warning("Backup promovido para servidor ativo.")
+    logging.warning(
+        "FAILOVER_BACKUP_ATIVO motivo=%s falhas=%s",
+        reason,
+        failure_count,
+    )
     socketio.emit(
         "server_promoted",
         {"role": "backup", "active": True, "server_url": BACKUP_PUBLIC_URL},
@@ -221,16 +225,20 @@ def heartbeat_worker():
                 response = requests.get(PRIMARY_HEALTH_URL, timeout=1.5)
                 if response.ok and response.json().get("active") is True:
                     failure_count = 0
-                    logging.info("Heartbeat OK do principal.")
+                    logging.info("HEARTBEAT_PRIMARIO_OK falhas=0")
                 else:
                     failure_count += 1
                     logging.warning(
-                        "Heartbeat invalido do principal. Falhas=%s",
+                        "HEARTBEAT_PRIMARIO_INVALIDO falhas=%s",
                         failure_count,
                     )
             except requests.RequestException as exc:
                 failure_count += 1
-                logging.warning("Heartbeat falhou: %s. Falhas=%s", exc, failure_count)
+                logging.warning(
+                    "HEARTBEAT_PRIMARIO_FALHOU falhas=%s erro=%s",
+                    failure_count,
+                    exc,
+                )
 
             if failure_count >= FAILURE_THRESHOLD:
                 promote_to_active()
@@ -252,6 +260,11 @@ def remove_client_state(sid):
 
     active = backup_is_active()
     if active and user:
+        logging.info(
+            "CHAT_USUARIO_SAIU role=backup sid=%s usuario=%s",
+            sid,
+            user["name"],
+        )
         socketio.emit(
             "chat_notification",
             notification_payload(f"{user['name']} saiu do chat."),
@@ -278,6 +291,11 @@ def handle_client_join(session):
         }
 
     if not previous:
+        logging.info(
+            "CHAT_USUARIO_ENTROU role=backup sid=%s usuario=%s",
+            session.sid,
+            session.name,
+        )
         socketio.emit(
             "chat_notification",
             notification_payload(f"{session.name} entrou no chat."),
@@ -326,6 +344,12 @@ def handle_client_send_message(session, data):
         "timestamp": now_iso(),
     }
     message = store_message(message, user_id=user["user_id"])
+    logging.info(
+        "CHAT_MENSAGEM_RECEBIDA role=backup sid=%s usuario=%s tamanho=%s",
+        session.sid,
+        user["name"],
+        len(text),
+    )
     socketio.emit("chat_message", message)
 
 
@@ -354,7 +378,11 @@ def handle_client_restore_primary(session):
         )
         return
 
-    logging.info("Servidor primario restaurado. Clientes serao reconectados.")
+    logging.info(
+        "RESTAURACAO_PRIMARIO_CONCLUIDA usuario=%s sid=%s",
+        session.name,
+        session.sid,
+    )
     socketio.emit("users_update", users_snapshot())
     socketio.emit(
         "primary_restored",
@@ -436,9 +464,11 @@ def replicate():
 
     if event == "message" and isinstance(data, dict):
         add_message(data)
+        logging.info("REPLICACAO_RECEBIDA evento=message")
     elif event == "users_snapshot" and isinstance(data, list):
         with state_lock:
             replicated_primary_users[:] = data
+        logging.info("REPLICACAO_RECEBIDA evento=users_snapshot usuarios=%s", len(data))
     else:
         return jsonify({"ok": False, "error": "evento desconhecido"}), 400
 
@@ -451,7 +481,8 @@ def promote():
     if payload.get("token") != REPLICATION_TOKEN:
         return jsonify({"ok": False, "error": "token invalido"}), 403
 
-    promote_to_active()
+    logging.warning("FAILOVER_PROMOTE_RECEBIDO origem=primario")
+    promote_to_active(reason="promocao_manual")
     return jsonify(
         {
             "ok": True,

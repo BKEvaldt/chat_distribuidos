@@ -85,7 +85,12 @@ class ClientThreadManager:
         # evento final de disconnect para limpar o estado do usuario.
         with session.queue.mutex:
             session.queue.queue.clear()
-        session.queue.put({"type": "disconnect"})
+        session.queue.put(
+            {
+                "type": "disconnect",
+                "reason": "cliente desconectou ou reconectou",
+            }
+        )
         return True
 
     def count(self):
@@ -102,13 +107,14 @@ class ClientThreadManager:
         especifico do servidor primario ou backup.
         """
         logging.info(
-            "Thread dedicada iniciada para cliente sid=%s user=%s role=%s",
+            "THREAD_CLIENTE_INICIADA role=%s sid=%s usuario=%s",
+            self.role,
             session.sid,
             session.name,
-            self.role,
         )
 
         with self.app.app_context():
+            close_reason = "encerramento solicitado"
             while True:
                 try:
                     event = session.queue.get(timeout=1)
@@ -119,14 +125,23 @@ class ClientThreadManager:
 
                 try:
                     event_type = event.get("type")
+                    logging.info(
+                        "THREAD_CLIENTE_EVENTO role=%s sid=%s usuario=%s evento=%s",
+                        self.role,
+                        session.sid,
+                        session.name,
+                        event_type,
+                    )
                     self.dispatch_event(session, event)
                     if event_type == "disconnect":
+                        close_reason = event.get("reason") or "disconnect recebido"
                         break
                 except Exception as exc:
                     logging.exception(
-                        "Erro na thread do cliente sid=%s role=%s",
-                        session.sid,
+                        "THREAD_CLIENTE_ERRO role=%s sid=%s usuario=%s",
                         self.role,
+                        session.sid,
+                        session.name,
                     )
                     if self.error_handler:
                         self.error_handler(session, exc)
@@ -137,8 +152,9 @@ class ClientThreadManager:
             self.sessions.pop(session.sid, None)
 
         logging.info(
-            "Thread dedicada encerrada para cliente sid=%s user=%s role=%s",
+            "THREAD_CLIENTE_ENCERRADA role=%s sid=%s usuario=%s motivo=%s",
+            self.role,
             session.sid,
             session.name,
-            self.role,
+            close_reason,
         )
