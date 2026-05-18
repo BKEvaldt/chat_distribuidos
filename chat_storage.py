@@ -1,3 +1,5 @@
+"""Funcoes de persistencia e leitura do historico do chat."""
+
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -6,10 +8,12 @@ from models import Message
 
 
 def now_iso():
+    """Gera timestamps UTC no mesmo formato usado nos payloads do chat."""
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def parse_iso_datetime(value):
+    """Converte timestamps recebidos pela rede para datetime UTC seguro."""
     if not value:
         return datetime.now(timezone.utc)
 
@@ -24,6 +28,7 @@ def parse_iso_datetime(value):
 
 
 def latest_messages(limit):
+    """Busca as ultimas mensagens de usuario e devolve em ordem cronologica."""
     messages = (
         Message.query.filter_by(type="user")
         .order_by(Message.created_at.desc(), Message.id.desc())
@@ -34,6 +39,7 @@ def latest_messages(limit):
 
 
 def store_message(payload, user_id=None):
+    """Salva uma mensagem evitando duplicidade quando ela vem da replicacao."""
     message_id = str(payload.get("id") or uuid4())
     existing = db.session.get(Message, message_id)
     if existing:

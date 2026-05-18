@@ -1,3 +1,5 @@
+"""Servidor primario do chat distribuido."""
+
 import logging
 import os
 import queue
@@ -25,6 +27,7 @@ logging.basicConfig(
 
 
 def required_env(name):
+    """Le uma variavel obrigatoria e falha cedo se o Render nao a definiu."""
     value = os.getenv(name)
     if not value:
         raise RuntimeError(f"Variavel de ambiente obrigatoria ausente: {name}")
@@ -32,6 +35,7 @@ def required_env(name):
 
 
 def database_uri():
+    """Ajusta a URL do Postgres para o driver psycopg usado pelo SQLAlchemy."""
     url = required_env("DATABASE_URL")
     if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql+psycopg://", 1)
@@ -41,11 +45,13 @@ def database_uri():
 
 
 def normalize_service_url(url):
+    """Aceita URL completa ou host simples nas variaveis dos servicos."""
     if url and not url.startswith(("http://", "https://")):
         return f"http://{url}"
     return url
 
 
+# A aplicacao Flask e inicializada no import, pois o Gunicorn importa wsgi:app.
 app = Flask(__name__)
 app.config["SECRET_KEY"] = required_env("SECRET_KEY")
 app.config["SQLALCHEMY_DATABASE_URI"] = database_uri()
@@ -65,6 +71,8 @@ socketio = SocketIO(
     ping_timeout=20,
 )
 
+# URLs e tokens vem do Render. O primario usa essas informacoes para falar com
+# o backup sem bloquear a interface dos usuarios.
 PRIMARY_PUBLIC_URL = required_env("PRIMARY_PUBLIC_URL")
 BACKUP_PUBLIC_URL = required_env("BACKUP_PUBLIC_URL")
 BACKUP_INTERNAL_URL = normalize_service_url(required_env("BACKUP_INTERNAL_URL"))
@@ -89,16 +97,20 @@ state_lock = threading.RLock()
 connected_users = {}
 background_threads_started = False
 
+# A replicacao e assincrona: a thread do cliente coloca eventos aqui, e uma
+# thread de fundo envia para o backup.
 replication_queue = queue.Queue()
 stop_threads = threading.Event()
 
 
 def clean_text(value, limit):
+    """Normaliza texto recebido do cliente antes de salvar ou retransmitir."""
     value = str(value or "").strip()
     return value[:limit]
 
 
 def users_snapshot():
+    """Monta a lista atual de usuarios conectados no primario."""
     with state_lock:
         return [
             {
@@ -114,10 +126,12 @@ def users_snapshot():
 
 
 def add_message(message, user_id=None):
+    """Pequeno atalho para deixar claro onde a persistencia acontece."""
     return store_message(message, user_id=user_id)
 
 
 def notification_payload(text, level="info"):
+    """Cria uma notificacao efemera para enviar pelo Socket.IO."""
     return {
         "id": str(uuid4()),
         "type": "notification",
@@ -128,10 +142,12 @@ def notification_payload(text, level="info"):
 
 
 def primary_is_active():
+    """Consulta o banco compartilhado para saber se o primario deve atender."""
     return active_role() == PRIMARY_ROLE
 
 
 def socket_user_from_auth(auth):
+    """Identifica o usuario pelo cookie Flask ou pelo token do Socket.IO."""
     if current_user.is_authenticated:
         return current_user
 
@@ -140,6 +156,7 @@ def socket_user_from_auth(auth):
 
 
 def shutdown_primary_process():
+    """Encerra o processo para simular/forcar failover manual no Render."""
     logging.warning("FAILOVER_PRIMARIO_ENCERRANDO motivo=failover_manual")
     stop_threads.set()
     os.kill(os.getpid(), signal.SIGTERM)
@@ -208,6 +225,7 @@ def monitor_worker():
 
 
 def emit_client_thread_error(session, exc):
+    """Envia erro generico ao cliente quando a thread dedicada falha."""
     socketio.emit(
         "chat_error",
         {"message": "Erro interno ao processar evento."},
@@ -216,6 +234,7 @@ def emit_client_thread_error(session, exc):
 
 
 def remove_client_state(sid):
+    """Remove o usuario da memoria local e replica a nova lista ao backup."""
     with state_lock:
         user = connected_users.pop(sid, None)
 
@@ -238,6 +257,7 @@ def remove_client_state(sid):
 
 
 def handle_client_join(session):
+    """Processa o evento join dentro da thread dedicada do cliente."""
     if not primary_is_active():
         socketio.emit(
             "chat_error",
@@ -274,6 +294,7 @@ def handle_client_join(session):
 
 
 def handle_client_send_message(session, data):
+    """Valida, salva, replica e retransmite uma mensagem de chat."""
     if not primary_is_active():
         socketio.emit(
             "chat_error",
@@ -322,6 +343,7 @@ def handle_client_send_message(session, data):
 
 
 def dispatch_primary_client_event(session, event):
+    """Roteia eventos da fila da ClientSession para a regra correta."""
     event_type = event.get("type")
 
     if event_type == "join":
@@ -349,6 +371,7 @@ client_threads = ClientThreadManager(
 @app.route("/")
 @login_required
 def index():
+    """Entrega a tela principal ja com token para o Web Worker."""
     return render_template(
         "index.html",
         primary_url=PRIMARY_PUBLIC_URL,
@@ -363,6 +386,7 @@ def index():
 
 @app.route("/health")
 def health():
+    """Endpoint de diagnostico usado pelo backup para decidir failover."""
     return jsonify(
         {
             "ok": True,
@@ -377,18 +401,21 @@ def health():
 
 @app.route("/ready")
 def ready():
+    """Health check simples e rapido para o Render."""
     return jsonify({"ok": True, "role": "primary"})
 
 
 @app.route("/messages")
 @login_required
 def messages():
+    """Endpoint auxiliar para consultar historico fora do fluxo Socket.IO."""
     return jsonify(latest_messages(MAX_HISTORY))
 
 
 @app.route("/failover", methods=["POST"])
 @login_required
 def trigger_failover():
+    """Promove o backup e agenda o encerramento do processo primario."""
     if not ENABLE_FAILOVER_CONTROL:
         return jsonify({"ok": False, "error": "controle de failover desativado"}), 404
 
@@ -429,6 +456,7 @@ def trigger_failover():
 
 @socketio.on("connect")
 def handle_connect(auth=None):
+    """Cria a thread dedicada assim que o cliente abre uma conexao Socket.IO."""
     user = socket_user_from_auth(auth)
     if not user:
         emit("chat_error", {"message": "Entre para acessar o chat."})
@@ -450,12 +478,14 @@ def handle_connect(auth=None):
 
 @socketio.on("join")
 def handle_join(data=None):
+    """Encaminha o join para a fila da thread do cliente."""
     if not client_threads.enqueue(request.sid, {"type": "join"}):
         emit("chat_error", {"message": "Entre para acessar o chat."})
 
 
 @socketio.on("send_message")
 def handle_send_message(data):
+    """Encaminha envio de mensagem para a thread dedicada do cliente."""
     if not client_threads.enqueue(
         request.sid,
         {"type": "send_message", "data": data or {}},
@@ -465,6 +495,7 @@ def handle_send_message(data):
 
 @socketio.on("disconnect")
 def handle_disconnect():
+    """Pede para a thread do cliente limpar estado e encerrar."""
     if not client_threads.stop(request.sid):
         remove_client_state(request.sid)
 
@@ -476,6 +507,7 @@ def default_error_handler(exc):
 
 
 def start_background_threads():
+    """Inicia as threads globais do primario uma unica vez por processo."""
     global background_threads_started
     if background_threads_started:
         return

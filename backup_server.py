@@ -1,3 +1,10 @@
+"""Servidor backup do chat distribuido.
+
+Ele fica em espera enquanto o primario esta saudavel. Se o heartbeat detectar
+falhas suficientes, este processo assume o papel ativo e passa a atender os
+clientes sem expor detalhes tecnicos na interface.
+"""
+
 import logging
 import os
 import threading
@@ -24,6 +31,7 @@ logging.basicConfig(
 
 
 def required_env(name):
+    """Le variavel obrigatoria e falha cedo quando a configuracao esta incompleta."""
     value = os.getenv(name)
     if not value:
         raise RuntimeError(f"Variavel de ambiente obrigatoria ausente: {name}")
@@ -31,6 +39,7 @@ def required_env(name):
 
 
 def database_uri():
+    """Converte a URL do Postgres para o driver psycopg usado no projeto."""
     url = required_env("DATABASE_URL")
     if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql+psycopg://", 1)
@@ -40,11 +49,14 @@ def database_uri():
 
 
 def normalize_service_url(url):
+    """Permite informar host simples ou URL completa nas variaveis do Render."""
     if url and not url.startswith(("http://", "https://")):
         return f"http://{url}"
     return url
 
 
+# O backup tem sua propria instancia Flask, mas usa o mesmo banco e as mesmas
+# rotas de login/cadastro para manter a experiencia igual a do primario.
 app = Flask(__name__)
 app.config["SECRET_KEY"] = required_env("SECRET_KEY")
 app.config["SQLALCHEMY_DATABASE_URI"] = database_uri()
@@ -64,6 +76,8 @@ socketio = SocketIO(
     ping_timeout=20,
 )
 
+# URLs, tokens e limites sao controlados por variaveis de ambiente no Render.
+# Assim o mesmo codigo pode rodar como primario ou backup sem hardcode.
 PRIMARY_PUBLIC_URL = required_env("PRIMARY_PUBLIC_URL")
 BACKUP_PUBLIC_URL = required_env("BACKUP_PUBLIC_URL")
 PRIMARY_INTERNAL_URL = normalize_service_url(required_env("PRIMARY_INTERNAL_URL"))
@@ -84,6 +98,8 @@ SHOW_FAILOVER_CONTROLS = os.getenv("SHOW_FAILOVER_CONTROLS", "1").lower() in {
 }
 PRIMARY_RESTORE_TIMEOUT = float(os.getenv("PRIMARY_RESTORE_TIMEOUT", "30"))
 
+# Estado em memoria do processo backup. O papel ativo real tambem fica no banco,
+# mas essas variaveis evitam consultas repetidas dentro de eventos muito curtos.
 state_lock = threading.RLock()
 restore_lock = threading.Lock()
 is_active = False
@@ -94,15 +110,18 @@ background_threads_started = False
 
 
 def clean_text(value, limit):
+    """Normaliza texto vindo do cliente antes de validar e persistir."""
     value = str(value or "").strip()
     return value[:limit]
 
 
 def add_message(message):
+    """Salva mensagens replicadas ou criadas pelo backup ativo."""
     return store_message(message)
 
 
 def notification_payload(text, level="info"):
+    """Monta uma notificacao temporaria para os clientes conectados."""
     return {
         "id": str(uuid4()),
         "type": "notification",
@@ -113,6 +132,7 @@ def notification_payload(text, level="info"):
 
 
 def primary_is_healthy():
+    """Consulta o /health do primario para saber se ele ainda esta ativo."""
     try:
         response = requests.get(PRIMARY_HEALTH_URL, timeout=1.5)
         return response.ok and response.json().get("active") is True
@@ -121,6 +141,7 @@ def primary_is_healthy():
 
 
 def wait_for_primary(timeout=PRIMARY_RESTORE_TIMEOUT):
+    """Espera o primario voltar antes de devolver o papel ativo para ele."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if primary_is_healthy():
@@ -130,6 +151,7 @@ def wait_for_primary(timeout=PRIMARY_RESTORE_TIMEOUT):
 
 
 def backup_is_active():
+    """Sincroniza a memoria local com o papel ativo salvo no banco."""
     global is_active
     active = active_role() == BACKUP_ROLE
     with state_lock:
@@ -138,6 +160,7 @@ def backup_is_active():
 
 
 def demote_to_standby():
+    """Coloca o backup de volta em espera quando o primario foi restaurado."""
     global failure_count, is_active
     with state_lock:
         is_active = False
@@ -146,7 +169,10 @@ def demote_to_standby():
 
 
 def restore_primary():
+    """Tenta devolver o atendimento ao primario de forma controlada."""
     with restore_lock:
+        # Primeiro alteramos o papel no banco; depois confirmamos se o primario
+        # realmente voltou a responder como ativo.
         set_active_role(PRIMARY_ROLE)
         if not wait_for_primary():
             set_active_role(BACKUP_ROLE)
@@ -157,6 +183,7 @@ def restore_primary():
 
 
 def socket_user_from_auth(auth):
+    """Autentica Socket.IO via sessao Flask ou token assinado vindo do Worker."""
     if current_user.is_authenticated:
         return current_user
 
@@ -165,6 +192,7 @@ def socket_user_from_auth(auth):
 
 
 def users_snapshot():
+    """Retorna os usuarios conectados ao backup quando ele esta ativo."""
     with state_lock:
         return [
             {
@@ -180,6 +208,7 @@ def users_snapshot():
 
 
 def promote_to_active(reason="falhas_heartbeat"):
+    """Promove o backup para servidor ativo e avisa os clientes conectados."""
     global failure_count, is_active
     with state_lock:
         if is_active:
@@ -247,6 +276,7 @@ def heartbeat_worker():
 
 
 def emit_client_thread_error(session, exc):
+    """Envia erro generico ao cliente se a thread dedicada falhar."""
     socketio.emit(
         "chat_error",
         {"message": "Erro interno ao processar evento."},
@@ -255,6 +285,7 @@ def emit_client_thread_error(session, exc):
 
 
 def remove_client_state(sid):
+    """Remove usuario local e propaga a nova lista para os clientes."""
     with state_lock:
         user = connected_users.pop(sid, None)
 
@@ -273,6 +304,7 @@ def remove_client_state(sid):
 
 
 def handle_client_join(session):
+    """Processa entrada no chat dentro da thread dedicada do cliente."""
     active = backup_is_active()
     if not active:
         socketio.emit(
@@ -307,6 +339,7 @@ def handle_client_join(session):
 
 
 def handle_client_send_message(session, data):
+    """Valida, salva e retransmite uma mensagem quando o backup esta ativo."""
     active = backup_is_active()
     if not active:
         socketio.emit(
@@ -354,6 +387,7 @@ def handle_client_send_message(session, data):
 
 
 def handle_client_restore_primary(session):
+    """Aciona a restauracao do primario a partir do botao de controle."""
     if not ENABLE_FAILOVER_CONTROL:
         socketio.emit(
             "chat_error",
@@ -391,6 +425,7 @@ def handle_client_restore_primary(session):
 
 
 def dispatch_backup_client_event(session, event):
+    """Entrega cada evento da fila para a regra de negocio correta."""
     event_type = event.get("type")
 
     if event_type == "join":
@@ -420,6 +455,7 @@ client_threads = ClientThreadManager(
 @app.route("/")
 @login_required
 def index():
+    """Entrega a mesma tela do chat, apontando o Worker para primario/backup."""
     return render_template(
         "index.html",
         primary_url=PRIMARY_PUBLIC_URL,
@@ -434,6 +470,7 @@ def index():
 
 @app.route("/health")
 def health():
+    """Endpoint usado pelo primario, Render e logs para diagnosticar o backup."""
     with state_lock:
         return jsonify(
             {
@@ -451,11 +488,13 @@ def health():
 
 @app.route("/ready")
 def ready():
+    """Health check rapido para o Render saber que o processo subiu."""
     return jsonify({"ok": True, "role": "backup"})
 
 
 @app.route("/replicate", methods=["POST"])
 def replicate():
+    """Recebe eventos replicados pelo primario enquanto o backup esta em espera."""
     payload = request.get_json(silent=True) or {}
     if payload.get("token") != REPLICATION_TOKEN:
         return jsonify({"ok": False, "error": "token invalido"}), 403
@@ -464,6 +503,8 @@ def replicate():
     data = payload.get("payload")
 
     with state_lock:
+        # Quando o backup ja assumiu, ele para de aceitar replicacao antiga para
+        # nao sobrescrever seu proprio estado ativo.
         if is_active:
             return jsonify({"ok": True, "ignored": "backup ja esta ativo"})
 
@@ -482,6 +523,7 @@ def replicate():
 
 @app.route("/promote", methods=["POST"])
 def promote():
+    """Permite que o primario solicite failover manualmente."""
     payload = request.get_json(silent=True) or {}
     if payload.get("token") != REPLICATION_TOKEN:
         return jsonify({"ok": False, "error": "token invalido"}), 403
@@ -501,11 +543,13 @@ def promote():
 @app.route("/messages")
 @login_required
 def messages():
+    """Consulta simples do historico persistido no banco compartilhado."""
     return jsonify(latest_messages(MAX_HISTORY))
 
 
 @socketio.on("connect")
 def handle_connect(auth=None):
+    """Cria a thread dedicada para a conexao Socket.IO aceita pelo backup."""
     user = socket_user_from_auth(auth)
     if not user:
         emit("chat_error", {"message": "Entre para acessar o chat."})
@@ -532,12 +576,14 @@ def handle_connect(auth=None):
 
 @socketio.on("join")
 def handle_join(data=None):
+    """Coloca o evento de entrada na fila da thread do cliente."""
     if not client_threads.enqueue(request.sid, {"type": "join"}):
         emit("chat_error", {"message": "Entre para acessar o chat."})
 
 
 @socketio.on("send_message")
 def handle_send_message(data):
+    """Coloca o envio de mensagem na fila da thread dedicada."""
     if not client_threads.enqueue(
         request.sid,
         {"type": "send_message", "data": data or {}},
@@ -547,12 +593,14 @@ def handle_send_message(data):
 
 @socketio.on("restore_primary")
 def handle_restore_primary():
+    """Encaminha o pedido de restauracao para a thread do solicitante."""
     if not client_threads.enqueue(request.sid, {"type": "restore_primary"}):
         emit("chat_error", {"message": "Entre para acessar o chat."})
 
 
 @socketio.on("disconnect")
 def handle_disconnect():
+    """Encerra a thread dedicada e limpa o estado do usuario."""
     if not client_threads.stop(request.sid):
         remove_client_state(request.sid)
 
@@ -564,6 +612,7 @@ def default_error_handler(exc):
 
 
 def start_background_threads():
+    """Inicia a thread global de heartbeat uma unica vez por processo."""
     global background_threads_started
     if background_threads_started:
         return

@@ -1,3 +1,5 @@
+"""Rotas de login, cadastro e logout usadas pelos dois servidores."""
+
 from urllib.parse import urlsplit
 
 from flask import redirect, render_template, request, url_for
@@ -9,16 +11,19 @@ from models import User
 
 @login_manager.user_loader
 def load_user(user_id):
+    """Flask-Login usa este callback para reconstruir o usuario da sessao."""
     if not str(user_id).isdigit():
         return None
     return db.session.get(User, int(user_id))
 
 
 def clean_username(value):
+    """Normaliza o nome de usuario antes de validar ou buscar no banco."""
     return str(value or "").strip()[:32]
 
 
 def is_safe_next(target):
+    """Impede redirecionamento para dominio externo depois do login."""
     if not target:
         return False
     parsed = urlsplit(target)
@@ -26,11 +31,13 @@ def is_safe_next(target):
 
 
 def register_auth_routes(app):
+    """Registra as rotas de autenticacao na instancia Flask recebida."""
     login_manager.login_view = "login"
     login_manager.login_message = "Entre para acessar o chat."
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
+        """Mostra o formulario e autentica o usuario quando houver POST."""
         if current_user.is_authenticated:
             return redirect(url_for("index"))
 
@@ -38,6 +45,8 @@ def register_auth_routes(app):
         if request.method == "POST":
             username = clean_username(request.form.get("username"))
             password = request.form.get("password") or ""
+            # username_key permite busca case-insensitive sem perder o nome
+            # exatamente como o usuario digitou no cadastro.
             user = User.query.filter_by(username_key=username.casefold()).first()
 
             if user and user.check_password(password):
@@ -51,6 +60,7 @@ def register_auth_routes(app):
 
     @app.route("/register", methods=["GET", "POST"])
     def register():
+        """Cria uma conta nova e ja inicia a sessao do usuario."""
         if current_user.is_authenticated:
             return redirect(url_for("index"))
 
@@ -80,5 +90,6 @@ def register_auth_routes(app):
 
     @app.route("/logout", methods=["POST"])
     def logout():
+        """Encerra a sessao Flask e volta para a tela de login."""
         logout_user()
         return redirect(url_for("login"))

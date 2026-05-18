@@ -1,3 +1,5 @@
+"""Configuracao do Alembic usada pelo Flask-Migrate."""
+
 import logging
 from logging.config import fileConfig
 
@@ -5,26 +7,26 @@ from flask import current_app
 
 from alembic import context
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
+# O objeto config representa o alembic.ini carregado pelo Flask-Migrate.
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
+# Mantemos a configuracao de logs do Alembic para enxergar migracoes no terminal.
 fileConfig(config.config_file_name)
 logger = logging.getLogger('alembic.env')
 
 
 def get_engine():
+    """Busca a engine SQLAlchemy considerando versoes antigas e novas."""
     try:
-        # this works with Flask-SQLAlchemy<3 and Alchemical
+        # Compatibilidade com Flask-SQLAlchemy<3 e Alchemical.
         return current_app.extensions['migrate'].db.get_engine()
     except (TypeError, AttributeError):
-        # this works with Flask-SQLAlchemy>=3
+        # Caminho usado pelo Flask-SQLAlchemy>=3.
         return current_app.extensions['migrate'].db.engine
 
 
 def get_engine_url():
+    """Entrega a URL do banco para o Alembic sem esconder a senha."""
     try:
         return get_engine().url.render_as_string(hide_password=False).replace(
             '%', '%%')
@@ -32,35 +34,24 @@ def get_engine_url():
         return str(get_engine().url).replace('%', '%%')
 
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
+# O Flask-Migrate usa a metadata dos models para comparar o banco atual com o
+# codigo quando geramos uma nova migracao.
 config.set_main_option('sqlalchemy.url', get_engine_url())
 target_db = current_app.extensions['migrate'].db
 
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
-
 
 def get_metadata():
+    """Retorna a metadata correta mesmo quando ha suporte a binds multiplos."""
     if hasattr(target_db, 'metadatas'):
         return target_db.metadatas[None]
     return target_db.metadata
 
 
 def run_migrations_offline():
-    """Run migrations in 'offline' mode.
+    """Executa migracoes sem abrir uma conexao real com o banco.
 
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
+    Esse modo e mais comum para gerar SQL, mas deixamos pronto porque faz parte
+    do fluxo padrao do Alembic.
 
     """
     url = config.get_main_option("sqlalchemy.url")
@@ -73,16 +64,9 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
-    """Run migrations in 'online' mode.
+    """Executa migracoes conectando de fato no banco configurado."""
 
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
-
-    # this callback is used to prevent an auto-migration from being generated
-    # when there are no changes to the schema
-    # reference: http://alembic.zzzcomputing.com/en/latest/cookbook.html
+    # Evita criar uma revisao vazia quando o autogenerate nao encontra mudancas.
     def process_revision_directives(context, revision, directives):
         if getattr(config.cmd_opts, 'autogenerate', False):
             script = directives[0]

@@ -1,3 +1,5 @@
+"""Infraestrutura das threads dedicadas de cada conexao Socket.IO."""
+
 import logging
 import queue
 import threading
@@ -25,9 +27,9 @@ class ClientThreadManager:
     """
     Gerencia as threads dedicadas dos clientes conectados.
 
-    Cada conexao cria uma thread
-    propria. Essa thread fica viva enquanto o cliente estiver conectado e
-    processa os eventos recebidos pela fila da sua ClientSession.
+    Cada conexao cria uma thread propria. Essa thread fica viva enquanto o
+    cliente estiver conectado e processa os eventos recebidos pela fila da sua
+    ClientSession.
     """
 
     def __init__(self, app, role, dispatch_event, error_handler=None):
