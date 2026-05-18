@@ -22,6 +22,7 @@
   let joined = false;
   let userName = config.currentUser || "";
   let reconnectTimer = null;
+  let reconnectNoticeTimer = null;
 
   function normalizeUrl(url) {
     return String(url || "").replace(/\/$/, "");
@@ -39,6 +40,10 @@
 
   function setStatus(text) {
     serverStatus.textContent = text;
+  }
+
+  function setConnectedStatus() {
+    setStatus("Conectado ao chat");
   }
 
   function updateServerControls(role, active) {
@@ -66,15 +71,31 @@
     reconnectTimer = window.setTimeout(connectToCandidate, delay);
   }
 
+  function clearReconnectNotice() {
+    window.clearTimeout(reconnectNoticeTimer);
+  }
+
+  function scheduleReconnectNotice() {
+    clearReconnectNotice();
+    reconnectNoticeTimer = window.setTimeout(function () {
+      if (!socket || !socket.connected) {
+        setStatus("Reconectando...");
+      }
+    }, 2500);
+  }
+
   function connectToCandidate() {
     if (!candidates.length) {
-      setStatus("Nenhum servidor configurado.");
+      setStatus("Chat indisponivel.");
       return;
     }
 
     const url = candidates[candidateIndex % candidates.length];
     candidateIndex += 1;
-    setStatus(`Conectando em ${url}...`);
+
+    if (!activeUrl) {
+      setStatus("Conectando...");
+    }
 
     if (socket) {
       socket.removeAllListeners();
@@ -89,20 +110,20 @@
     });
 
     socket.on("connect_error", function () {
-      setStatus("Servidor indisponivel. Tentando alternativa...");
+      scheduleReconnectNotice();
       scheduleReconnect(900);
     });
 
     socket.on("disconnect", function () {
       joined = false;
-      setStatus("Conexao perdida. Reconectando...");
+      scheduleReconnectNotice();
       scheduleReconnect(900);
     });
 
     socket.on("server_info", function (info) {
       if (!info.active) {
         updateServerControls(info.role, false);
-        setStatus("Servidor em espera. Procurando ativo...");
+        scheduleReconnectNotice();
         socket.disconnect();
         scheduleReconnect(900);
         return;
@@ -110,7 +131,8 @@
 
       activeUrl = info.server_url || url;
       activeRole = info.role || "servidor";
-      setStatus(`Conectado ao ${activeRole}: ${activeUrl}`);
+      clearReconnectNotice();
+      setConnectedStatus();
       updateServerControls(activeRole, true);
 
       if (userName) {
@@ -121,15 +143,13 @@
     socket.on("server_promoted", function (info) {
       activeUrl = info.server_url || activeUrl;
       activeRole = info.role || "backup";
-      setStatus(`Conectado ao ${activeRole}: ${activeUrl}`);
+      clearReconnectNotice();
+      setConnectedStatus();
       updateServerControls(activeRole, true);
-      showToast("Backup ativo.", "warning");
     });
 
     socket.on("primary_restored", function (info) {
       preferCandidate(info.server_url || config.primaryUrl);
-      setStatus("Primario restaurado. Reconectando...");
-      showToast("Primario restaurado.", "success");
       updateServerControls("backup", false);
       if (socket) {
         socket.disconnect();
@@ -150,6 +170,9 @@
 
     socket.on("chat_notification", function (notification) {
       if (notification && notification.text) {
+        if (isPresenceNotification(notification.text)) {
+          return;
+        }
         showToast(notification.text, notification.level);
       }
     });
@@ -158,9 +181,24 @@
 
     socket.on("chat_error", function (error) {
       if (error && error.message) {
+        if (isServerRoutingMessage(error.message)) {
+          return;
+        }
         setStatus(error.message);
       }
     });
+  }
+
+  function isServerRoutingMessage(message) {
+    return [
+      "Servidor primario em espera.",
+      "Backup em espera. Tentando servidor principal.",
+      "Backup ainda nao esta ativo."
+    ].includes(message);
+  }
+
+  function isPresenceNotification(message) {
+    return /\s(entrou|saiu) no chat\.$/.test(message);
   }
 
   function joinChat(name) {
@@ -292,7 +330,7 @@
       }
 
       failoverButton.disabled = true;
-      setStatus("Acionando failover manual...");
+      setStatus("Aplicando troca...");
 
       fetch(config.failoverUrl, {
         method: "POST",
@@ -306,7 +344,6 @@
         })
         .then(function (data) {
           preferCandidate(data.backup_url || config.backupUrl);
-          setStatus("Primario desligando. Conectando ao backup...");
           if (socket) {
             socket.disconnect();
           }
@@ -314,7 +351,7 @@
         })
         .catch(function () {
           failoverButton.disabled = false;
-          setStatus("Nao foi possivel acionar o failover manual.");
+          setStatus("Nao foi possivel aplicar a troca.");
         });
     });
   }
@@ -326,12 +363,12 @@
       }
 
       if (!socket || !socket.connected || activeRole !== "backup") {
-        setStatus("Conecte-se ao backup ativo para restaurar o primario.");
+        setStatus("Nao foi possivel aplicar a troca.");
         return;
       }
 
       restoreButton.disabled = true;
-      setStatus("Restaurando servidor primario...");
+      setStatus("Aplicando troca...");
       socket.emit("restore_primary");
     });
   }

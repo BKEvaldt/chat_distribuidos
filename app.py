@@ -78,6 +78,11 @@ ENABLE_FAILOVER_CONTROL = os.getenv("ENABLE_FAILOVER_CONTROL", "1").lower() not 
     "false",
     "no",
 }
+SHOW_FAILOVER_CONTROLS = os.getenv("SHOW_FAILOVER_CONTROLS", "0").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 state_lock = threading.RLock()
 connected_users = {}
@@ -217,9 +222,9 @@ def index():
         backup_url=BACKUP_PUBLIC_URL,
         current_username=current_user.username,
         socket_auth_token=generate_socket_token(current_user),
-        failover_control_enabled=ENABLE_FAILOVER_CONTROL,
+        failover_control_enabled=ENABLE_FAILOVER_CONTROL and SHOW_FAILOVER_CONTROLS,
         failover_url="/failover",
-        restore_control_enabled=ENABLE_FAILOVER_CONTROL,
+        restore_control_enabled=ENABLE_FAILOVER_CONTROL and SHOW_FAILOVER_CONTROLS,
     )
 
 
@@ -247,6 +252,8 @@ def messages():
 def trigger_failover():
     if not ENABLE_FAILOVER_CONTROL:
         return jsonify({"ok": False, "error": "controle de failover desativado"}), 404
+
+    logging.warning("Failover manual solicitado por %s.", current_user.username)
 
     payload = {
         "token": REPLICATION_TOKEN,

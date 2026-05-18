@@ -76,6 +76,11 @@ ENABLE_FAILOVER_CONTROL = os.getenv("ENABLE_FAILOVER_CONTROL", "1").lower() not 
     "false",
     "no",
 }
+SHOW_FAILOVER_CONTROLS = os.getenv("SHOW_FAILOVER_CONTROLS", "0").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 PRIMARY_RESTORE_TIMEOUT = float(os.getenv("PRIMARY_RESTORE_TIMEOUT", "30"))
 
 state_lock = threading.RLock()
@@ -195,13 +200,6 @@ def promote_to_active():
         "server_promoted",
         {"role": "backup", "active": True, "server_url": BACKUP_PUBLIC_URL},
     )
-    socketio.emit(
-        "chat_notification",
-        notification_payload(
-            "Backup assumiu como servidor ativo apos falha no principal.",
-            level="warning",
-        ),
-    )
 
 
 def heartbeat_worker():
@@ -257,7 +255,7 @@ def index():
         socket_auth_token=generate_socket_token(current_user),
         failover_control_enabled=False,
         failover_url=None,
-        restore_control_enabled=ENABLE_FAILOVER_CONTROL,
+        restore_control_enabled=ENABLE_FAILOVER_CONTROL and SHOW_FAILOVER_CONTROLS,
     )
 
 
@@ -439,13 +437,7 @@ def handle_restore_primary():
         emit("chat_error", {"message": "Nao foi possivel restaurar o primario."})
         return
 
-    socketio.emit(
-        "chat_notification",
-        notification_payload(
-            "Servidor primario restaurado. Reconectando clientes.",
-            level="success",
-        ),
-    )
+    logging.info("Servidor primario restaurado. Clientes serao reconectados.")
     socketio.emit("users_update", users_snapshot())
     socketio.emit(
         "primary_restored",
