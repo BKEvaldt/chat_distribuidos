@@ -7,6 +7,7 @@
   const toastRegion = document.getElementById("toastRegion");
   const usersList = document.getElementById("usersList");
   const serverSwitchButton = document.getElementById("serverSwitchButton");
+  const clearMessagesButton = document.getElementById("clearMessagesButton");
 
   let chatWorker = null;
   let userName = config.currentUser || "";
@@ -75,6 +76,16 @@
       return;
     }
 
+    if (data.type === "messages_cleared") {
+      const payload = data.payload || {};
+      messages.innerHTML = "";
+      if (clearMessagesButton) {
+        clearMessagesButton.disabled = false;
+      }
+      showToast(`Historico apagado por ${payload.by || "administrador"}.`, "info");
+      return;
+    }
+
     if (data.type === "users_update") {
       renderUsers(data.users || []);
       return;
@@ -85,6 +96,15 @@
       if (error.message && !isServerRoutingMessage(error.message)) {
         setStatus(error.message);
       }
+      return;
+    }
+
+    if (data.type === "clear_messages_failed") {
+      const error = data.error || {};
+      if (clearMessagesButton) {
+        clearMessagesButton.disabled = false;
+      }
+      setStatus(error.message || "Nao foi possivel limpar o chat.");
       return;
     }
 
@@ -228,6 +248,22 @@
       serverSwitchButton.disabled = true;
       setStatus("Aplicando troca...");
       chatWorker.postMessage({ type: "switch_server" });
+    });
+  }
+
+  if (clearMessagesButton) {
+    clearMessagesButton.addEventListener("click", function () {
+      if (!window.confirm("Apagar todo o historico do chat?")) {
+        return;
+      }
+
+      if (!chatWorker) {
+        setStatus("Nao foi possivel limpar o chat.");
+        return;
+      }
+
+      clearMessagesButton.disabled = true;
+      chatWorker.postMessage({ type: "clear_messages" });
     });
   }
 

@@ -13,7 +13,7 @@ from flask_login import current_user, login_required
 from flask_socketio import SocketIO, emit
 
 from auth import register_auth_routes
-from chat_storage import latest_messages, now_iso, store_message
+from chat_storage import clear_messages, latest_messages, now_iso, store_message
 from client_threads import ClientThreadManager
 from extensions import db, login_manager, migrate
 from server_state import BACKUP_ROLE, PRIMARY_ROLE, active_role, set_active_role
@@ -92,6 +92,8 @@ SHOW_FAILOVER_CONTROLS = os.getenv("SHOW_FAILOVER_CONTROLS", "1").lower() in {
     "true",
     "yes",
 }
+CLEAR_MESSAGES_USERNAME = os.getenv("CLEAR_MESSAGES_USERNAME", "bruno")
+CLEAR_MESSAGES_USERNAME_KEY = CLEAR_MESSAGES_USERNAME.casefold()
 
 state_lock = threading.RLock()
 connected_users = {}
@@ -144,6 +146,11 @@ def notification_payload(text, level="info"):
 def primary_is_active():
     """Consulta o banco compartilhado para saber se o primario deve atender."""
     return active_role() == PRIMARY_ROLE
+
+
+def can_clear_messages(username):
+    """Centraliza a regra: apenas o usuario configurado pode limpar o chat."""
+    return str(username or "").casefold() == CLEAR_MESSAGES_USERNAME_KEY
 
 
 def socket_user_from_auth(auth):
@@ -231,6 +238,29 @@ def emit_client_thread_error(session, exc):
         {"message": "Erro interno ao processar evento."},
         to=session.sid,
     )
+
+
+def emit_clear_messages_failed(session, message):
+    """Avisa apenas o solicitante quando a limpeza do chat foi recusada."""
+    socketio.emit("clear_messages_failed", {"message": message}, to=session.sid)
+
+
+def clear_chat_history(requested_by):
+    """Apaga o historico e avisa todos os clientes conectados ao primario."""
+    deleted = clear_messages()
+    payload = {
+        "by": requested_by,
+        "deleted": deleted,
+        "timestamp": now_iso(),
+    }
+    replicate_event("clear_messages", payload)
+    logging.warning(
+        "CHAT_HISTORICO_LIMPO role=primary usuario=%s mensagens=%s",
+        requested_by,
+        deleted,
+    )
+    socketio.emit("messages_cleared", payload)
+    return payload
 
 
 def remove_client_state(sid):
@@ -342,6 +372,24 @@ def handle_client_send_message(session, data):
     replicate_event("message", message)
 
 
+def handle_client_clear_messages(session):
+    """Apaga o historico quando o pedido veio do usuario autorizado."""
+    if not primary_is_active():
+        emit_clear_messages_failed(session, "Servidor primario em espera.")
+        return
+
+    if not can_clear_messages(session.name):
+        logging.warning(
+            "CHAT_LIMPEZA_NEGADA role=primary sid=%s usuario=%s",
+            session.sid,
+            session.name,
+        )
+        emit_clear_messages_failed(session, "Usuario sem permissao para limpar o chat.")
+        return
+
+    clear_chat_history(session.name)
+
+
 def dispatch_primary_client_event(session, event):
     """Roteia eventos da fila da ClientSession para a regra correta."""
     event_type = event.get("type")
@@ -350,6 +398,8 @@ def dispatch_primary_client_event(session, event):
         handle_client_join(session)
     elif event_type == "send_message":
         handle_client_send_message(session, event.get("data") or {})
+    elif event_type == "clear_messages":
+        handle_client_clear_messages(session)
     elif event_type == "disconnect":
         remove_client_state(session.sid)
     else:
@@ -381,6 +431,7 @@ def index():
         failover_control_enabled=ENABLE_FAILOVER_CONTROL and SHOW_FAILOVER_CONTROLS,
         failover_url="/failover",
         restore_control_enabled=ENABLE_FAILOVER_CONTROL and SHOW_FAILOVER_CONTROLS,
+        can_clear_messages=can_clear_messages(current_user.username),
     )
 
 
@@ -410,6 +461,24 @@ def ready():
 def messages():
     """Endpoint auxiliar para consultar historico fora do fluxo Socket.IO."""
     return jsonify(latest_messages(MAX_HISTORY))
+
+
+@app.route("/clear-messages", methods=["POST"])
+@login_required
+def clear_chat_messages():
+    """Endpoint administrativo para limpar o chat quando chamado no dominio ativo."""
+    if not can_clear_messages(current_user.username):
+        logging.warning(
+            "CHAT_LIMPEZA_NEGADA role=primary usuario=%s origem=http",
+            current_user.username,
+        )
+        return jsonify({"ok": False, "error": "usuario sem permissao"}), 403
+
+    if not primary_is_active():
+        return jsonify({"ok": False, "error": "servidor primario em espera"}), 409
+
+    payload = clear_chat_history(current_user.username)
+    return jsonify({"ok": True, **payload})
 
 
 @app.route("/failover", methods=["POST"])
@@ -491,6 +560,13 @@ def handle_send_message(data):
         {"type": "send_message", "data": data or {}},
     ):
         emit("chat_error", {"message": "Entre para acessar o chat."})
+
+
+@socketio.on("clear_messages")
+def handle_clear_messages():
+    """Encaminha a limpeza do historico para a thread dedicada do cliente."""
+    if not client_threads.enqueue(request.sid, {"type": "clear_messages"}):
+        emit("clear_messages_failed", {"message": "Entre para acessar o chat."})
 
 
 @socketio.on("disconnect")

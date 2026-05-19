@@ -38,6 +38,13 @@ def latest_messages(limit):
     return [message.to_payload() for message in reversed(messages)]
 
 
+def clear_messages():
+    """Apaga todo o historico persistido do chat e retorna quantas linhas sairam."""
+    deleted = Message.query.delete(synchronize_session=False)
+    db.session.commit()
+    return deleted
+
+
 def store_message(payload, user_id=None):
     """Salva uma mensagem evitando duplicidade quando ela vem da replicacao."""
     message_id = str(payload.get("id") or uuid4())

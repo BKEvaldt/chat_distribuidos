@@ -16,6 +16,9 @@
           </div>
           <div class="topbar-actions">
             <span class="user-pill">{{ current_username }}</span>
+            {% if can_clear_messages %}
+              <button id="clearMessagesButton" class="secondary-button" type="button">Limpar chat</button>
+            {% endif %}
             {% if failover_control_enabled or restore_control_enabled %}
               <button id="serverSwitchButton" class="secondary-button" type="button" hidden>Trocar servidor</button>
             {% endif %}
@@ -48,6 +51,7 @@
         currentUser: {{ current_username|tojson }},
         socketAuthToken: {{ socket_auth_token|tojson }},
         failoverUrl: {{ failover_url|tojson }},
+        canClearMessages: {{ can_clear_messages|tojson }},
         workerUrl: {{ url_for('static', filename='js/chat-worker.js')|tojson }}
       };
     </script>

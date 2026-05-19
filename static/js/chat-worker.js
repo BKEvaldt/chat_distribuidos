@@ -154,6 +154,14 @@ function connectToCandidate() {
     post("chat_notification", { notification: notification || {} });
   });
 
+  socket.on("messages_cleared", function (payload) {
+    post("messages_cleared", { payload: payload || {} });
+  });
+
+  socket.on("clear_messages_failed", function (error) {
+    post("clear_messages_failed", { error: error || {} });
+  });
+
   socket.on("users_update", function (users) {
     post("users_update", { users: users || [] });
   });
@@ -198,6 +206,17 @@ function sendMessage(text) {
   }
 
   socket.emit("send_message", { text: text });
+}
+
+function clearMessages() {
+  if (!userName || !socket || !socket.connected) {
+    post("clear_messages_failed", {
+      error: { message: "Chat desconectado. Tente novamente." }
+    });
+    return;
+  }
+
+  socket.emit("clear_messages");
 }
 
 function switchServer() {
@@ -257,6 +276,11 @@ self.onmessage = function (event) {
 
   if (message.type === "send_message") {
     sendMessage(String(message.text || "").trim());
+    return;
+  }
+
+  if (message.type === "clear_messages") {
+    clearMessages();
     return;
   }
 
