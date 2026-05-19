@@ -236,10 +236,6 @@
 
   if (serverSwitchButton) {
     serverSwitchButton.addEventListener("click", function () {
-      if (!window.confirm("Trocar para o outro servidor?")) {
-        return;
-      }
-
       if (!chatWorker) {
         setStatus("Nao foi possivel aplicar a troca.");
         return;
@@ -253,10 +249,6 @@
 
   if (clearMessagesButton) {
     clearMessagesButton.addEventListener("click", function () {
-      if (!window.confirm("Apagar todo o historico do chat?")) {
-        return;
-      }
-
       if (!chatWorker) {
         setStatus("Nao foi possivel limpar o chat.");
         return;
